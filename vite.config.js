@@ -3,15 +3,17 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 
 export default defineConfig({
   plugins: [svelte()],
+  base: './',
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
-    modulePreload: false,
+    cssCodeSplit: false,
     rollupOptions: {
       output: {
         format: 'iife',
-        entryFileNames: 'assets/app.js',
-        assetFileNames: 'assets/app.[ext]'
+        inlineDynamicImports: true,
+        entryFileNames: 'app.js',
+        assetFileNames: 'app.[ext]'
       }
     }
   }
