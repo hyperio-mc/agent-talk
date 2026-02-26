@@ -4,9 +4,9 @@
   --bg-card: #1a1a24;
   --fg: #ffffff;
   --fg-muted: #8b8b9e;
-  --accent: #7c3aed;
-  --accent-light: #a78bfa;
-  --accent-glow: rgba(124, 58, 237, 0.3);
+  --accent: #f97316;
+  --accent-light: #fb923c;
+  --accent-glow: rgba(249, 115, 22, 0.3);
   --success: #22c55e;
   --border: #2a2a3a;
   --radius: 12px;
@@ -68,7 +68,7 @@ h1 {
 }
 
 h1 .gradient {
-  background: linear-gradient(135deg, var(--accent-light), #ec4899);
+  background: linear-gradient(135deg, var(--accent-light), #f472b6);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -439,7 +439,7 @@ h2 {
 
 .pricing-card.featured {
   border-color: var(--accent);
-  background: linear-gradient(180deg, var(--bg-card), rgba(124, 58, 237, 0.1));
+  background: linear-gradient(180deg, var(--bg-card), rgba(249, 115, 22, 0.1));
 }
 
 .featured-badge {

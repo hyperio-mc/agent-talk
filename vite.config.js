@@ -5,6 +5,14 @@ export default defineConfig({
   plugins: [svelte()],
   build: {
     outDir: 'dist',
-    assetsDir: 'assets'
+    assetsDir: 'assets',
+    modulePreload: false,
+    rollupOptions: {
+      output: {
+        format: 'iife',
+        entryFileNames: 'assets/app.js',
+        assetFileNames: 'assets/app.[ext]'
+      }
+    }
   }
 })
