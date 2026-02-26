@@ -35,9 +35,10 @@
           <span class="code-title">api-call.js</span>
         </div>
         <div class="code-tabs">
-          <button class="active" data-tab="install">Install Skill</button>
-          <button data-tab="prompt">Use with Prompt</button>
-          <button data-tab="code">Direct API</button>
+          <button class="active" data-tab="install">Install</button>
+          <button data-tab="hook">Auto Hook</button>
+          <button data-tab="prompt">Prompt</button>
+          <button data-tab="code">API</button>
         </div>
         <pre class="code-content" id="code-display"><code># Install the Agent Talk skill
 openclaw skills install agent-talk
@@ -142,20 +143,28 @@ openclaw skills install agent-talk
 
 # Or add to your SKILLS.md
 echo "- agent-talk: Text-to-speech for AI agents" >> SKILLS.md`,
+      hook: `# Add to HEARTBEAT.md or session config
+# Auto-speak every response
+
+hooks:
+  after_response:
+    - skill: agent-talk
+      action: speak
+      voice: rachel
+
+# Now every agent response is automatically voiced!`,
       prompt: `# Just ask your agent to speak!
 
 User: "Read me my calendar for today"
 
 Agent: "Let me check... You have 3 meetings:
-- 10am: Team standup
+- 10am: Team standup  
 - 2pm: Client demo
-- 4pm: 1:1 with Sarah
+- 4pm: 1:1 with Sarah"
+[🔊 Audio plays automatically via hook]
 
-I'll read this to you..."
-[🔊 Audio plays automatically]
-
-# The agent uses the skill automatically:
-read_aloud("Your calendar for today...")`,
+# The hook calls:
+read_aloud(response_text, voice="rachel")`,
       code: `// Direct API call
 const response = await fetch('https://talk.onhyper.io/api/v1/memo', {
   method: 'POST',
@@ -171,12 +180,6 @@ const response = await fetch('https://talk.onhyper.io/api/v1/memo', {
 
 const { audio } = await response.json();
 // → { url: "data:audio/mpeg;base64,...", duration: 3.2 }`
-    };
-
-    const tabLabels = {
-      install: 'Install Skill',
-      prompt: 'Use with Prompt',
-      code: 'Direct API'
     };
 
     document.querySelectorAll('.code-tabs button').forEach(btn => {
