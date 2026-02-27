@@ -1,0 +1,67 @@
+# Dependencies
+node_modules/
+server/node_modules/
+
+# Build outputs (rebuilt in Docker)
+dist/
+server/dist/
+
+# Development files
+.vscode/
+.idea/
+*.md
+ORCHESTRATOR.md
+orchestrate.sh
+orchestrator.py
+
+# Test files
+server/tests/
+server/test-*.ts
+**/*.test.ts
+**/*.spec.ts
+
+# Database files (will be created at runtime)
+data/
+*.db
+*.db-journal
+*.db-wal
+
+# Audio files (will be created at runtime)
+*.mp3
+*.wav
+*.ogg
+*.webm
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Railway
+railway.toml
+
+# SDK (not needed in production)
+sdk/
+
+# Tasks and docs
+tasks/
+docs/
+dashboard.html

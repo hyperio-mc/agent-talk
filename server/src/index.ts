@@ -1,19 +1,70 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { serveStatic } from '@hono/node-server/serve-static';
 import { MemoService } from './services/memo.js';
+import { initStorage } from './services/storage.js';
+import { authRoutes } from './routes/auth.js';
+import { adminRoutes } from './routes/admin.js';
+import { keysRoutes } from './routes/keys.js';
+import { audioRoutes } from './routes/audio.js';
+import { dashboardRoutes } from './routes/dashboard.js';
+import { analyticsRoutes } from './routes/analytics.js';
+import { billingRoutes } from './routes/billing.js';
+import { requestLogger } from './middleware/requestLogger.js';
+import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { logger } from './utils/logger.js';
+import {
+  ValidationError,
+  InvalidInputError,
+  MissingFieldError,
+  InvalidVoiceError,
+  NotImplementedError,
+  TTSServiceError,
+  InvalidApiKeyError,
+  MissingApiKeyError
+} from './errors/index.js';
+import { getDb, closeDb, runMigrations, checkHealth } from './db/index.js';
+import {
+  extractApiKey,
+  validateApiKey,
+  recordKeyUsage,
+  isApiKeyFormat
+} from './services/apiKey.js';
+import { simpleRateLimit } from './middleware/rateLimit.js';
+import { findUserById } from './db/users.js';
+import { createMemo } from './db/memos.js';
+import {
+  logMemoCreated,
+  logMemoFailed,
+  logKeyCreated,
+} from './services/analytics.js';
 
 // Types for environment bindings
 interface Env {
   ELEVENLABS_API_KEY?: string;
   TTS_MODE?: 'simulation' | 'edge' | 'elevenlabs';
   BASE_URL?: string;
+  DATABASE_URL?: string;
+  DATABASE_PATH?: string;
+  SEED_ON_START?: string;
 }
 
 // Create Hono app
 const app = new Hono<{ Bindings: Env }>();
 
+// Request logging middleware (first, to capture all requests)
+app.use('*', requestLogger({
+  skipPaths: ['/health', '/favicon.ico']
+}));
+
 // Enable CORS
 app.use('*', cors());
+
+// Global error handler (will catch errors from routes)
+app.onError(errorHandler({
+  includeStackTrace: process.env.NODE_ENV !== 'production',
+  logErrors: true
+}));
 
 // Initialize service (will be created per-request in serverless)
 function getTTSMode(c: any): 'simulation' | 'edge' | 'elevenlabs' {
@@ -28,14 +79,37 @@ function getBaseUrl(c: any): string {
   return c.env?.BASE_URL || 'https://talk.onhyper.io';
 }
 
+// Auth routes
+app.route('/api/v1/auth', authRoutes);
+
+// Admin routes
+app.route('/api/v1/admin', adminRoutes);
+
+// API key management routes (require session auth, not API key)
+app.route('/api/keys', keysRoutes);
+
+// Dashboard routes (require session auth)
+app.route('/api/v1/dashboard', dashboardRoutes);
+
+// Analytics routes (require session auth)
+app.route('/api/v1/analytics', analyticsRoutes);
+
+// Billing routes (tier info, upgrades)
+app.route('/api/v1/billing', billingRoutes);
+
+// Audio file serving routes
+app.route('/audio', audioRoutes);
+
 // Health check
 app.get('/health', (c) => {
+  const dbHealth = checkHealth();
   return c.json({
     status: 'ok',
     service: 'Agent Talk API',
     version: '1.0.0',
     timestamp: new Date().toISOString(),
-    ttsMode: getTTSMode(c)
+    ttsMode: getTTSMode(c),
+    database: dbHealth
   });
 });
 
@@ -47,90 +121,199 @@ app.get('/api/v1/voices', (c) => {
   });
 });
 
-// Create memo (text to speech)
-app.post('/api/v1/memo', async (c) => {
+// Public demo endpoint (no API key required - uses simulation mode)
+app.post('/api/v1/demo', async (c) => {
+  // Parse and validate request body
+  let body: { text?: unknown; voice?: unknown };
   try {
-    const body = await c.req.json();
-    const { text, voice } = body;
-
-    // Validate input
-    if (!text || typeof text !== 'string') {
-      return c.json({ error: 'Invalid input: text is required' }, 400);
-    }
-
-    if (!voice || typeof voice !== 'string') {
-      return c.json({ error: 'Invalid input: voice is required' }, 400);
-    }
-
-    const service = new MemoService(getTTSMode(c), getApiKey(c));
-
-    // Validate voice
-    if (!service.isValidVoice(voice)) {
-      return c.json({
-        error: 'Invalid voice',
-        requestedVoice: voice,
-        availableVoices: service.getAvailableVoices()
-      }, 400);
-    }
-
-    // Generate memo
-    const memo = await service.createMemo(text, voice, getBaseUrl(c));
-
-    return c.json(memo, 201);
-  } catch (error) {
-    console.error('Error creating memo:', error);
-    return c.json({
-      error: 'Failed to create memo',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500);
+    body = await c.req.json();
+  } catch {
+    throw new ValidationError('Invalid JSON body');
   }
+
+  const { text, voice } = body;
+
+  // Validate text field
+  if (text === undefined || text === null || text === '') {
+    throw new MissingFieldError('text');
+  }
+  if (typeof text !== 'string') {
+    throw new InvalidInputError('text', 'expected string', text);
+  }
+
+  // Validate voice field
+  if (voice === undefined || voice === null || voice === '') {
+    throw new MissingFieldError('voice');
+  }
+  if (typeof voice !== 'string') {
+    throw new InvalidInputError('voice', 'expected string', voice);
+  }
+
+  // Always use simulation mode for demo
+  const service = new MemoService('simulation', undefined);
+
+  // Validate voice exists
+  if (!service.isValidVoice(voice)) {
+    throw new InvalidVoiceError(voice, service.getAvailableVoices().map(v => v.id));
+  }
+
+  // Generate memo (simulation mode)
+  const memo = await service.createMemo(text, voice, getBaseUrl(c));
+
+  return c.json(memo, 201);
+});
+
+// Create memo (text to speech)
+// Requires API key authentication
+app.post('/api/v1/memo', async (c) => {
+  // API Key Authentication
+  const authHeader = c.req.header('Authorization');
+  const apiKey = extractApiKey(authHeader);
+  
+  if (!apiKey) {
+    throw new MissingApiKeyError();
+  }
+  
+  // Validate API key (throws InvalidApiKeyError or RevokedKeyError)
+  let keyInfo: { keyId: string; userId: string };
+  try {
+    keyInfo = validateApiKey(apiKey);
+  } catch (error: unknown) {
+    // Re-throw AppErrors as-is
+    if (error instanceof InvalidApiKeyError) {
+      throw error;
+    }
+    // Check for RevokedKeyError by constructor name
+    if (error && typeof error === 'object' && 'constructor' in error && error.constructor.name === 'RevokedKeyError') {
+      throw error;
+    }
+    throw new InvalidApiKeyError();
+  }
+  
+  // Check rate limit before processing
+  await simpleRateLimit(c, keyInfo.keyId, keyInfo.userId);
+  
+  // Parse and validate request body
+  let body: { text?: unknown; voice?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    throw new ValidationError('Invalid JSON body');
+  }
+
+  const { text, voice } = body;
+
+  // Validate text field
+  if (text === undefined || text === null || text === '') {
+    throw new MissingFieldError('text');
+  }
+  if (typeof text !== 'string') {
+    throw new InvalidInputError('text', 'expected string', text);
+  }
+
+  // Validate voice field
+  if (voice === undefined || voice === null || voice === '') {
+    throw new MissingFieldError('voice');
+  }
+  if (typeof voice !== 'string') {
+    throw new InvalidInputError('voice', 'expected string', voice);
+  }
+
+  const service = new MemoService(getTTSMode(c), getApiKey(c));
+
+  // Validate voice exists
+  if (!service.isValidVoice(voice)) {
+    throw new InvalidVoiceError(voice, service.getAvailableVoices().map(v => v.id));
+  }
+
+  // Generate memo
+  let memo;
+  try {
+    memo = await service.createMemo(text, voice, getBaseUrl(c));
+  } catch (error) {
+    // Log TTS failure
+    logMemoFailed(keyInfo.userId, keyInfo.keyId, {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      voice,
+      textLength: text.length,
+    });
+    throw error;
+  }
+
+  // Store memo in database
+  const memoRecord = createMemo({
+    userId: keyInfo.userId,
+    apiKeyId: keyInfo.keyId,
+    text: memo.text,
+    voice: memo.voice.id,
+    audioUrl: memo.audio.url,
+    durationSeconds: memo.audio.duration,
+    characterCount: text.length,
+  });
+
+  // Record API key usage (increment usage count)
+  recordKeyUsage(keyInfo.keyId);
+
+  // Log analytics event
+  logMemoCreated(keyInfo.userId, keyInfo.keyId, {
+    voice: memo.voice.id,
+    characterCount: text.length,
+    duration: memo.audio.duration,
+  });
+
+  return c.json({
+    ...memo,
+    id: memoRecord.id,
+  }, 201);
 });
 
 // Get memo by ID
 app.get('/api/v1/memo/:id', async (c) => {
-  const id = c.req.param('id');
-  
   // In stateless mode, we can't retrieve memos
   // Audio files should be served from cache/storage
-  return c.json({
-    error: 'Memo retrieval requires storage backend',
-    hint: 'Use the audio URL from the memo creation response'
-  }, 501);
+  throw new NotImplementedError('Memo retrieval');
 });
 
 // List memos
-app.get('/api/v1/memos', (c) => {
-  return c.json({
-    error: 'Memo listing requires storage backend',
-    hint: 'Store memo IDs client-side for reference'
-  }, 501);
+app.get('/api/v1/memos', () => {
+  throw new NotImplementedError('Memo listing');
 });
 
-// Serve audio files (placeholder - needs storage backend)
-app.get('/audio/:filename', async (c) => {
-  const filename = c.req.param('filename');
+// Serve static files (frontend)
+// First try to serve static files from public directory
+app.use('/*', serveStatic({ root: './public' }));
+
+// SPA fallback - serve index.html for non-API routes
+app.get('*', async (c) => {
+  const path = c.req.path;
   
-  // In production, this would serve from object storage
-  // For now, return a placeholder
-  return c.json({
-    error: 'Audio file not found or expired',
-    filename
-  }, 404);
+  // Skip API and audio routes
+  if (path.startsWith('/api/') || path.startsWith('/audio/') || path.startsWith('/health')) {
+    return c.notFound();
+  }
+  
+  // For SPA routes, serve index.html
+  try {
+    const fs = await import('fs');
+    const pathModule = await import('path');
+    const { fileURLToPath } = await import('url');
+    const __dirname = pathModule.dirname(fileURLToPath(import.meta.url));
+    const indexPath = pathModule.join(__dirname, '../public/index.html');
+    
+    if (fs.existsSync(indexPath)) {
+      const indexContent = fs.readFileSync(indexPath, 'utf-8');
+      return c.html(indexContent);
+    }
+  } catch (error) {
+    logger.logError('Failed to serve SPA fallback', error);
+  }
+  
+  // If no index.html, return 404
+  return c.notFound();
 });
 
-// 404 handler
-app.notFound((c) => {
-  return c.json({ error: 'Not Found', path: c.req.path }, 404);
-});
-
-// Error handler
-app.onError((err, c) => {
-  console.error('Server error:', err);
-  return c.json({
-    error: 'Internal Server Error',
-    message: err.message
-  }, 500);
-});
+// 404 handler for unmatched routes
+app.notFound(notFoundHandler);
 
 export default app;
 
@@ -139,10 +322,38 @@ if (typeof process !== 'undefined' && import.meta.url === `file://${process.argv
   const { serve } = await import('@hono/node-server');
   const port = parseInt(process.env.PORT || '3001');
   
+  // Initialize database
+  logger.info('Initializing database...');
+  runMigrations();
+  
+  // Initialize storage
+  logger.info('Initializing storage...');
+  initStorage();
+  
+  // Seed development data if enabled
+  if (process.env.SEED_ON_START === 'true') {
+    const { seedDatabase } = await import('./db/seed.js');
+    logger.info('Seeding development data...');
+    seedDatabase();
+  }
+  
   serve({
     fetch: app.fetch,
     port
   });
   
-  console.log(`🎙️  Agent Talk API running on http://localhost:${port}`);
+  logger.info(`🎙️  Agent Talk API running on http://localhost:${port}`);
+  
+  // Graceful shutdown
+  process.on('SIGINT', () => {
+    logger.info('Shutting down...');
+    closeDb();
+    process.exit(0);
+  });
+  
+  process.on('SIGTERM', () => {
+    logger.info('Shutting down...');
+    closeDb();
+    process.exit(0);
+  });
 }

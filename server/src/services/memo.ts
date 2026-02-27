@@ -1,6 +1,10 @@
 /**
- * Memo Service - Text-to-speech conversion with ElevenLabs
+ * Memo Service - Text-to-speech conversion with ElevenLabs and Edge TTS
  */
+
+import { logger } from '../utils/logger.js';
+import { getStorage, initStorage } from './storage.js';
+import { getEdgeTTSService, EDGE_VOICE_MAPPINGS } from './edgeTTS.js';
 
 export interface Voice {
   id: string;
@@ -40,6 +44,7 @@ const VOICES: Record<string, VoiceMapping> = {
     name: 'Rachel',
     gender: 'female',
     elevenlabsId: '21m00Tcm4TlvDq8ikWAM',
+    edgeVoice: EDGE_VOICE_MAPPINGS.rachel?.name,
     description: 'Calm, professional'
   },
   domi: {
@@ -47,6 +52,7 @@ const VOICES: Record<string, VoiceMapping> = {
     name: 'Domi',
     gender: 'female',
     elevenlabsId: 'AZnzlk1XvdvUeBnXmlld',
+    edgeVoice: EDGE_VOICE_MAPPINGS.domi?.name,
     description: 'Strong, confident'
   },
   bella: {
@@ -54,6 +60,7 @@ const VOICES: Record<string, VoiceMapping> = {
     name: 'Bella',
     gender: 'female',
     elevenlabsId: 'EXAVITQu4vr4xnSDxMaL',
+    edgeVoice: EDGE_VOICE_MAPPINGS.bella?.name,
     description: 'Soft, warm'
   },
   adam: {
@@ -61,6 +68,7 @@ const VOICES: Record<string, VoiceMapping> = {
     name: 'Adam',
     gender: 'male',
     elevenlabsId: 'pNInz6obpgDQGcFmaJgB',
+    edgeVoice: EDGE_VOICE_MAPPINGS.adam?.name,
     description: 'Deep narration'
   },
   sam: {
@@ -68,6 +76,7 @@ const VOICES: Record<string, VoiceMapping> = {
     name: 'Sam',
     gender: 'male',
     elevenlabsId: 'yoZ06aMxZJJ28mfd3POQ',
+    edgeVoice: EDGE_VOICE_MAPPINGS.sam?.name,
     description: 'Conversational'
   },
   charlie: {
@@ -75,6 +84,7 @@ const VOICES: Record<string, VoiceMapping> = {
     name: 'Charlie',
     gender: 'male',
     elevenlabsId: 'IKne3meq5aSn9XLyUdCD',
+    edgeVoice: EDGE_VOICE_MAPPINGS.charlie?.name,
     description: 'Casual conversational'
   },
   emily: {
@@ -82,6 +92,7 @@ const VOICES: Record<string, VoiceMapping> = {
     name: 'Emily',
     gender: 'female',
     elevenlabsId: 'LcfcDJNUP1GQjkzn1xUU',
+    edgeVoice: EDGE_VOICE_MAPPINGS.emily?.name,
     description: 'Soft, gentle'
   },
   ethan: {
@@ -89,6 +100,7 @@ const VOICES: Record<string, VoiceMapping> = {
     name: 'Ethan',
     gender: 'male',
     elevenlabsId: 'g5CIjZEefAph4nQFvHAz',
+    edgeVoice: EDGE_VOICE_MAPPINGS.ethan?.name,
     description: 'Young male'
   },
   freya: {
@@ -96,6 +108,7 @@ const VOICES: Record<string, VoiceMapping> = {
     name: 'Freya',
     gender: 'female',
     elevenlabsId: 'jsCqWAovK2LkecY7zXl4',
+    edgeVoice: EDGE_VOICE_MAPPINGS.freya?.name,
     description: 'Young, energetic'
   },
   dorothy: {
@@ -103,6 +116,7 @@ const VOICES: Record<string, VoiceMapping> = {
     name: 'Dorothy',
     gender: 'female',
     elevenlabsId: 'ThT5KcBeYPX3keUQqHPh',
+    edgeVoice: EDGE_VOICE_MAPPINGS.dorothy?.name,
     description: 'Storyteller'
   },
   bill: {
@@ -110,6 +124,7 @@ const VOICES: Record<string, VoiceMapping> = {
     name: 'Bill',
     gender: 'male',
     elevenlabsId: 'flq6f7yk4E4fJM5XTYuZ',
+    edgeVoice: EDGE_VOICE_MAPPINGS.bill?.name,
     description: 'Mature male'
   },
   sarah: {
@@ -117,6 +132,7 @@ const VOICES: Record<string, VoiceMapping> = {
     name: 'Sarah',
     gender: 'female',
     elevenlabsId: 'pMsXgVXv3BLzUgSXRplE',
+    edgeVoice: EDGE_VOICE_MAPPINGS.sarah?.name,
     description: 'Professional female'
   }
 };
@@ -130,7 +146,7 @@ export class MemoService {
     this.ttsMode = ttsMode;
     this.apiKey = apiKey || null;
     
-    console.log(`🎙️ MemoService initialized with TTS mode: ${this.ttsMode}`);
+    logger.debug('MemoService initialized', { ttsMode: this.ttsMode });
   }
 
   /**
@@ -170,20 +186,24 @@ export class MemoService {
       throw new Error(`Unknown voice: ${voiceName}`);
     }
 
-    console.log(`🎙️ Creating memo with voice "${voiceName}"...`);
-    console.log(`📝 Text: ${text.substring(0, 100)}${text.length > 100 ? '...' : ''}`);
+    logger.debug('Creating memo', { 
+      voice: voiceName, 
+      textLength: text.length,
+      textPreview: text.substring(0, 100) + (text.length > 100 ? '...' : '')
+    });
 
     // Generate audio
     const audioBuffer = await this.generateAudio(text, voice);
 
     // Create memo object
     const memoId = this.generateId();
-    const filename = `memo_${memoId}.mp3`;
 
-    // In a full implementation, we'd store the audio in object storage
-    // For now, we'll encode it as base64 and return it inline
-    const audioBase64 = this.bufferToBase64(audioBuffer);
-    const audioUrl = `data:audio/mpeg;base64,${audioBase64}`;
+    // Store audio file using storage service
+    const storage = getStorage();
+    const uploadResult = await storage.upload(audioBuffer, 'mp3');
+    
+    // Use the URL from storage service (not base64)
+    const audioUrl = uploadResult.url;
 
     const memo: Memo = {
       id: memoId,
@@ -202,7 +222,7 @@ export class MemoService {
       createdAt: new Date().toISOString()
     };
 
-    console.log(`✅ Memo created: ${memoId}`);
+    logger.info('Memo created', { memoId, voice: voiceName, duration: memo.audio.duration, audioUrl });
     return memo;
   }
 
@@ -214,10 +234,7 @@ export class MemoService {
       case 'elevenlabs':
         return this.generateElevenLabsAudio(text, voice.elevenlabsId);
       case 'edge':
-        // Edge TTS would be implemented here
-        // For now, fall back to simulation
-        console.log('⚠️ Edge TTS not implemented, using simulation');
-        return this.generateSimulationAudio(text);
+        return this.generateEdgeTTSAudio(text, voice);
       case 'simulation':
       default:
         return this.generateSimulationAudio(text);
@@ -229,7 +246,7 @@ export class MemoService {
    */
   private async generateElevenLabsAudio(text: string, voiceId: string): Promise<ArrayBuffer> {
     if (!this.apiKey) {
-      console.log('⚠️ No ElevenLabs API key, using simulation');
+      logger.warn('No ElevenLabs API key, using simulation');
       return this.generateSimulationAudio(text);
     }
 
@@ -255,40 +272,75 @@ export class MemoService {
       );
 
       if (!response.ok) {
-        const error = await response.text();
-        console.error(`ElevenLabs API error: ${response.status} ${error}`);
+        const errorText = await response.text();
+        logger.error('ElevenLabs API error', { 
+          statusCode: response.status, 
+          errorMessage: errorText 
+        });
         throw new Error(`ElevenLabs API error: ${response.status}`);
       }
 
-      console.log('✅ ElevenLabs audio generated');
+      logger.info('ElevenLabs audio generated', { voiceId });
       return response.arrayBuffer();
     } catch (error) {
-      console.error('Failed to generate ElevenLabs audio:', error);
+      logger.error('Failed to generate ElevenLabs audio');
       // Fallback to simulation
       return this.generateSimulationAudio(text);
     }
   }
 
   /**
+   * Generate audio using Edge TTS (free)
+   */
+  private async generateEdgeTTSAudio(text: string, voice: VoiceMapping): Promise<ArrayBuffer> {
+    try {
+      const edgeTTSService = getEdgeTTSService();
+      const voiceId = voice.id; // Use the voice ID (e.g., 'rachel')
+      
+      logger.debug('Generating Edge TTS audio', { voice: voiceId, textLength: text.length });
+      
+      const audioBuffer = await edgeTTSService.generateAudio(text, voiceId);
+      
+      logger.info('Edge TTS audio generated', { 
+        voice: voiceId, 
+        size: audioBuffer.byteLength 
+      });
+      
+      return audioBuffer;
+    } catch (error) {
+      logger.error('Failed to generate Edge TTS audio', {
+        error: {
+          name: error instanceof Error ? error.name : 'Error',
+          message: error instanceof Error ? error.message : String(error)
+        },
+        voice: voice.id
+      });
+      
+      // Fallback to simulation on error
+      logger.warn('Falling back to simulation mode');
+      return this.generateSimulationAudio(text);
+    }
+  }
+
+  /**
    * Generate simulation audio (placeholder)
-   * In a real implementation, this would return a minimal audio file
+   * Returns a minimal but valid MP3 file with silence
    */
   private async generateSimulationAudio(text: string): Promise<ArrayBuffer> {
-    // Return a minimal MP3 header (silent audio)
-    // This is a valid MP3 file with 1 frame of silence
-    const silentMp3 = Buffer.from([
-      0xff, 0xfb, 0x90, 0x00, // MP3 frame header
-      0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00
-    ]);
+    // Create a minimal valid MP3 file with ~1 second of silence
+    // This is a proper MP3 header + silent frame
+    const silentMp3Base64 = '//uQxAAAAAANIAAAAAExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVY=';
     
-    console.log('🔊 Generated simulation audio (silent placeholder)');
-    return silentMp3.buffer as ArrayBuffer;
+    // Decode base64 to buffer
+    const binaryString = Buffer.from(silentMp3Base64, 'base64').toString('binary');
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    
+    logger.debug('Generated simulation audio (silent placeholder)');
+    return bytes.buffer as ArrayBuffer;
   }
 
   /**

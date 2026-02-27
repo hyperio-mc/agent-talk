@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f97316;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#f472b6;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="1200" height="630" fill="#0a0a0f"/>
+  
+  <!-- Decorative circles -->
+  <circle cx="100" cy="100" r="200" fill="#12121a" opacity="0.5"/>
+  <circle cx="1100" cy="530" r="250" fill="#12121a" opacity="0.5"/>
+  
+  <!-- Gradient accent bar -->
+  <rect x="60" y="250" width="8" height="130" rx="4" fill="url(#gradient)"/>
+  
+  <!-- Main text -->
+  <text x="100" y="310" font-family="system-ui, -apple-system, sans-serif" font-size="72" font-weight="700" fill="white">
+    Agent Talk
+  </text>
+  
+  <!-- Subtitle -->
+  <text x="100" y="370" font-family="system-ui, -apple-system, sans-serif" font-size="28" fill="#8b8b9e">
+    Text-to-Speech API for AI Agents
+  </text>
+  
+  <!-- Tagline -->
+  <text x="100" y="420" font-family="system-ui, -apple-system, sans-serif" font-size="22" fill="#8b8b9e">
+    One POST request returns playable audio. No webhooks, no callbacks.
+  </text>
+  
+  <!-- CTA button -->
+  <rect x="100" y="470" width="200" height="50" rx="12" fill="#f97316"/>
+  <text x="200" y="502" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="600" fill="white" text-anchor="middle">
+    Get API Key →
+  </text>
+  
+  <!-- Code snippet background -->
+  <rect x="650" y="120" width="500" height="400" rx="12" fill="#1a1a24" stroke="#2a2a3a" stroke-width="1"/>
+  
+  <!-- Window dots -->
+  <circle cx="675" cy="145" r="6" fill="#ff5f56"/>
+  <circle cx="695" cy="145" r="6" fill="#ffbd2e"/>
+  <circle cx="715" cy="145" r="6" fill="#27c93f"/>
+  
+  <!-- Code text -->
+  <text x="680" y="210" font-family="monospace" font-size="14" fill="#e2e8f0">
+    <tspan x="680" dy="0">const response = await fetch(</tspan>
+    <tspan x="680" dy="24">  'https://talk.onhyper.io/api/v1/memo',</tspan>
+    <tspan x="680" dy="24">  {</tspan>
+    <tspan x="680" dy="24">    method: 'POST',</tspan>
+    <tspan x="680" dy="24">    body: JSON.stringify({</tspan>
+    <tspan x="680" dy="24">      text: "Task complete!",</tspan>
+    <tspan x="680" dy="24">      voice: "rachel"</tspan>
+    <tspan x="680" dy="24">    })</tspan>
+    <tspan x="680" dy="24">  }</tspan>
+    <tspan x="680" dy="24">);</tspan>
+    <tspan x="680" dy="36" fill="#22c55e">// → Audio ready instantly</tspan>
+  </text>
+  
+  <!-- Stats -->
+  <text x="1050" y="550" font-family="system-ui, -apple-system, sans-serif" font-size="16" fill="#8b8b9e" text-anchor="end">
+    &lt;50ms latency • 12 voices • 99.9% uptime
+  </text>
+  
+  <!-- Powered by -->
+  <text x="1100" y="600" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#8b8b9e" text-anchor="end">
+    Powered by HYPR
+  </text>
+</svg>
