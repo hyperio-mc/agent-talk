@@ -1,0 +1,56 @@
+# Dependencies (rebuilt in Docker)
+node_modules/
+server/node_modules/
+
+# Build outputs (rebuilt in Docker)
+dist/
+server/dist/
+
+# Development files
+.vscode/
+.idea/
+*.md
+!README.md
+ORCHESTRATOR.md
+orchestrate.sh
+orchestrator.py
+
+# Test files
+server/tests/
+**/*.test.ts
+**/*.spec.ts
+
+# Database files
+data/
+*.db
+*.db-journal
+*.db-wal
+
+# Audio files
+*.mp3
+*.wav
+*.ogg
+*.webm
+
+# Logs
+logs/
+*.log
+
+# Environment files
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+
+# SDK
+sdk/
+
+# Tasks and docs
+tasks/
+docs/
+dashboard.html

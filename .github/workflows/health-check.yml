@@ -1,0 +1,144 @@
+name: Health Check
+
+on:
+  schedule:
+    # Run every 5 minutes
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    # Allow manual trigger
+    inputs:
+      url:
+        description: 'URL to check (default: production)'
+        required: false
+        default: ''
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+      - name: Determine URL
+        id: url
+        run: |
+          if [ -n "${{ github.event.inputs.url }}" ]; then
+            echo "url=${{ github.event.inputs.url }}" >> $GITHUB_OUTPUT
+          else
+            echo "url=https://talk.onhyper.io" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Check health endpoint
+        id: health
+        run: |
+          RESPONSE=$(curl -s -o response.json -w '%{http_code}' --max-time 10 ${{ steps.url.outputs.url }}/health)
+          echo "status_code=$RESPONSE" >> $GITHUB_OUTPUT
+          
+          if [ "$RESPONSE" -eq 200 ]; then
+            echo "✅ Health check passed (HTTP $RESPONSE)"
+            echo "status=ok" >> $GITHUB_OUTPUT
+            cat response.json
+          else
+            echo "❌ Health check failed (HTTP $RESPONSE)"
+            echo "status=failed" >> $GITHUB_OUTPUT
+            cat response.json 2>/dev/null || echo "No response body"
+            exit 1
+          fi
+      
+      - name: Check detailed health
+        if: always()
+        run: |
+          echo "Checking detailed health..."
+          curl -s --max-time 10 ${{ steps.url.outputs.url }}/health/detailed | jq '.' || echo "Could not parse JSON response"
+      
+      - name: Check readiness
+        if: always()
+        run: |
+          echo "Checking readiness..."
+          curl -s --max-time 10 ${{ steps.url.outputs.url }}/health/ready | jq '.' || echo "Could not parse JSON response"
+      
+      - name: Check liveness
+        if: always()
+        run: |
+          echo "Checking liveness..."
+          curl -s --max-time 10 ${{ steps.url.outputs.url }}/health/live | jq '.' || echo "Could not parse JSON response"
+      
+      - name: Record response time
+        if: always()
+        run: |
+          echo "Recording response time..."
+          TIME=$(curl -o /dev/null -s -w '%{time_total}' --max-time 10 ${{ steps.url.outputs.url }}/health)
+          echo "Response time: ${TIME}s"
+          
+          # Alert if response time > 1 second
+          if (( $(echo "$TIME > 1.0" | bc -l) )); then
+            echo "⚠️ Slow response time: ${TIME}s exceeds 1s threshold"
+          fi
+      
+      - name: Create issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const url = '${{ steps.url.outputs.url }}';
+            const statusCode = '${{ steps.health.outputs.status_code }}';
+            
+            // Check for existing open issue with same title
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'health-check'
+            });
+            
+            const existingIssue = issues.data.find(issue => 
+              issue.title.includes('Health Check Failed')
+            );
+            
+            if (existingIssue) {
+              console.log('Existing health check issue found, adding comment...');
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existingIssue.number,
+                body: `## Health Check Failed Again\n\n**Time:** ${new Date().toISOString()}\n**URL:** ${url}\n**Status:** HTTP ${statusCode}\n\n[View Run](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`
+              });
+            } else {
+              console.log('Creating new issue...');
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `🚨 Health Check Failed - ${url}`,
+                body: `## Health Check Failed\n\n**Time:** ${new Date().toISOString()}\n**URL:** ${url}\n**Status:** HTTP ${statusCode}\n\nThe production health check is failing. Please investigate immediately.\n\n[View Run](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+                labels: ['health-check', 'production', 'priority:high']
+              });
+            }
+      
+      - name: Close issue on success
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'health-check'
+            });
+            
+            for (const issue of issues.data) {
+              if (issue.title.includes('Health Check Failed')) {
+                console.log(`Closing issue #${issue.number}`);
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `✅ Health check recovered at ${new Date().toISOString()}`
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'closed'
+                });
+              }
+            }

@@ -15,6 +15,12 @@ import {
   ValidationError,
   UnauthorizedError,
 } from '../errors/index.js';
+import {
+  TIERS,
+  TierName,
+  getTierConfig,
+} from '../config/tiers.js';
+import { getRateLimitStatus } from '../middleware/rateLimit.js';
 
 export const dashboardRoutes = new Hono();
 
@@ -30,6 +36,11 @@ dashboardRoutes.get('/stats', requireAuth, async (c) => {
   }
   
   const db = getDb();
+  
+  // Get user tier
+  const user = db.prepare('SELECT tier FROM users WHERE id = ?').get(authUser.userId) as { tier: string } | undefined;
+  const userTier = (user?.tier || 'hobby') as TierName;
+  const tierConfig = getTierConfig(userTier);
   
   // Get usage stats
   const todayUsage = db.prepare(`
@@ -68,6 +79,9 @@ dashboardRoutes.get('/stats', requireAuth, async (c) => {
     WHERE user_id = ?
   `).get(authUser.userId) as { total: number; total_characters: number };
   
+  // Get rate limit status
+  const rateLimitStatus = getRateLimitStatus(authUser.userId, userTier);
+  
   return c.json({
     success: true,
     stats: {
@@ -79,11 +93,25 @@ dashboardRoutes.get('/stats', requireAuth, async (c) => {
       apiKeys: {
         total: keyStats.total || 0,
         active: keyStats.active || 0,
+        maxAllowed: tierConfig.limits.maxApiKeys,
       },
       memos: {
         total: memoStats.total || 0,
         totalCharacters: memoStats.total_characters || 0,
       },
+      rateLimit: {
+        limit: rateLimitStatus.limit === -1 ? 'unlimited' : rateLimitStatus.limit,
+        used: rateLimitStatus.used,
+        remaining: rateLimitStatus.remaining === -1 ? 'unlimited' : rateLimitStatus.remaining,
+        resetAt: rateLimitStatus.resetAt.toISOString(),
+      },
+    },
+    tier: {
+      name: userTier,
+      displayName: tierConfig.displayName,
+      price: tierConfig.price,
+      tts: tierConfig.features.tts,
+      priority: tierConfig.features.priority,
     },
   });
 });
@@ -281,15 +309,46 @@ dashboardRoutes.get('/account', requireAuth, async (c) => {
     throw new UnauthorizedError('User not found');
   }
   
+  const tierConfig = getTierConfig(user.tier as TierName);
+  const allTiers = Object.values(TIERS).map(t => ({
+    name: t.name,
+    displayName: t.displayName,
+    price: t.price,
+    highlighted: t.highlighted || false,
+  }));
+  
   return c.json({
     success: true,
     account: {
       id: user.id,
       email: user.email,
       tier: user.tier,
+      tierName: tierConfig.displayName,
       role: user.role,
       createdAt: user.created_at,
       updatedAt: user.updated_at,
     },
+    tierInfo: {
+      limits: {
+        callsPerDay: tierConfig.limits.callsPerDay === null ? 'unlimited' : tierConfig.limits.callsPerDay,
+        charsPerMemo: tierConfig.limits.charsPerMemo === null ? 'unlimited' : tierConfig.limits.charsPerMemo,
+        maxApiKeys: tierConfig.limits.maxApiKeys,
+        maxConcurrent: tierConfig.limits.maxConcurrent,
+      },
+      features: {
+        voices: tierConfig.features.voices,
+        tts: tierConfig.features.tts,
+        priority: tierConfig.features.priority,
+        voiceCloning: tierConfig.features.voiceCloning,
+        customVoices: tierConfig.features.customVoices,
+        analytics: tierConfig.features.analytics,
+        webhooks: tierConfig.features.webhooks,
+        customBranding: tierConfig.features.customBranding,
+        dedicatedSupport: tierConfig.features.dedicatedSupport,
+        slaPercentage: tierConfig.features.slaPercentage,
+      },
+    },
+    availableTiers: allTiers,
+    upgradeUrl: user.tier === 'hobby' ? '/billing/upgrade' : null,
   });
 });

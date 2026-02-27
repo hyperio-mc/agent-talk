@@ -1,3 +1,6 @@
+// Load environment variables from .env file (for Node.js development)
+import 'dotenv/config';
+
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
@@ -10,6 +13,7 @@ import { audioRoutes } from './routes/audio.js';
 import { dashboardRoutes } from './routes/dashboard.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { billingRoutes } from './routes/billing.js';
+import { healthRoutes } from './routes/health.js';
 import { requestLogger } from './middleware/requestLogger.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { logger } from './utils/logger.js';
@@ -33,6 +37,7 @@ import {
 import { simpleRateLimit } from './middleware/rateLimit.js';
 import { findUserById } from './db/users.js';
 import { createMemo } from './db/memos.js';
+import { isCharacterCountAllowed, getTierCharLimit } from './config/tiers.js';
 import {
   logMemoCreated,
   logMemoFailed,
@@ -68,15 +73,18 @@ app.onError(errorHandler({
 
 // Initialize service (will be created per-request in serverless)
 function getTTSMode(c: any): 'simulation' | 'edge' | 'elevenlabs' {
-  return c.env?.TTS_MODE || 'simulation';
+  // Support both Node.js (process.env) and Cloudflare Workers (c.env)
+  return c.env?.TTS_MODE || process.env.TTS_MODE || 'simulation';
 }
 
 function getApiKey(c: any): string | undefined {
-  return c.env?.ELEVENLABS_API_KEY;
+  // Support both Node.js (process.env) and Cloudflare Workers (c.env)
+  return c.env?.ELEVENLABS_API_KEY || process.env.ELEVENLABS_API_KEY;
 }
 
 function getBaseUrl(c: any): string {
-  return c.env?.BASE_URL || 'https://talk.onhyper.io';
+  // Support both Node.js (process.env) and Cloudflare Workers (c.env)
+  return c.env?.BASE_URL || process.env.BASE_URL || 'https://talk.onhyper.io';
 }
 
 // Auth routes
@@ -100,17 +108,14 @@ app.route('/api/v1/billing', billingRoutes);
 // Audio file serving routes
 app.route('/audio', audioRoutes);
 
-// Health check
-app.get('/health', (c) => {
-  const dbHealth = checkHealth();
-  return c.json({
-    status: 'ok',
-    service: 'Agent Talk API',
-    version: '1.0.0',
-    timestamp: new Date().toISOString(),
-    ttsMode: getTTSMode(c),
-    database: dbHealth
-  });
+// Health check routes
+app.route('/health', healthRoutes);
+
+// Metrics endpoint for monitoring
+app.get('/api/v1/metrics', async (c) => {
+  const { getMetricsSummary } = await import('./services/monitoring.js');
+  const metrics = getMetricsSummary();
+  return c.json(metrics);
 });
 
 // List available voices
@@ -209,6 +214,24 @@ app.post('/api/v1/memo', async (c) => {
   }
   if (typeof text !== 'string') {
     throw new InvalidInputError('text', 'expected string', text);
+  }
+
+  // Get user's tier for character limit check
+  const user = await findUserById(keyInfo.userId);
+  const userTier = user?.tier || 'hobby';
+  
+  // Check character limit based on tier
+  const charLimit = getTierCharLimit(userTier as 'hobby' | 'pro' | 'enterprise');
+  if (charLimit !== null && text.length > charLimit) {
+    throw new ValidationError(
+      `Character limit exceeded. Your tier allows up to ${charLimit} characters per memo.`,
+      {
+        field: 'text',
+        limit: charLimit,
+        provided: text.length,
+        tier: userTier,
+      }
+    );
   }
 
   // Validate voice field

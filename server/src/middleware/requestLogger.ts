@@ -6,10 +6,12 @@
  * - Request ID for tracing
  * - Response status and duration
  * - IP address and user agent
+ * - Metrics collection for monitoring
  */
 
 import { Context, Next } from 'hono';
 import { logger, createRequestLogger, generateRequestId, type LogMetadata } from '../utils/logger.js';
+import { recordRequest, recordError } from '../services/monitoring.js';
 
 /**
  * Request context stored in Hono's context
@@ -119,6 +121,9 @@ export function requestLogger(options: RequestLoggerOptions = {}) {
       const duration = Date.now() - startTime;
       const status = c.res.status;
 
+      // Record metrics for monitoring
+      recordRequest(c.req.method, path, status, duration);
+
       // Determine log level based on status
       const level = status >= 500 ? 'error' : status >= 400 ? 'warn' : 'info';
       const message = status >= 500 
@@ -137,6 +142,11 @@ export function requestLogger(options: RequestLoggerOptions = {}) {
       };
 
       requestLogger[level](message, responseMeta);
+
+      // Record error for monitoring (for 5xx errors)
+      if (status >= 500) {
+        recordError('server_error', `HTTP ${status}`, path);
+      }
     }
   };
 }
