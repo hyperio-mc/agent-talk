@@ -54,7 +54,7 @@ analyticsRoutes.get('/usage', requireAuth, async (c) => {
     }
   }
   
-  const stats = getUsageStats(authUser.userId, startDate, endDate);
+  const stats = await getUsageStats(authUser.userId, startDate, endDate);
   
   return c.json({
     success: true,
@@ -74,7 +74,7 @@ analyticsRoutes.get('/voices', requireAuth, async (c) => {
     throw new UnauthorizedError('Not authenticated');
   }
   
-  const popularity = getVoicePopularity(authUser.userId);
+  const popularity = await getVoicePopularity(authUser.userId);
   
   return c.json({
     success: true,
@@ -119,7 +119,7 @@ analyticsRoutes.get('/errors', requireAuth, async (c) => {
     }
   }
   
-  const stats = getErrorStats(authUser.userId, startDate, endDate);
+  const stats = await getErrorStats(authUser.userId, startDate, endDate);
   
   return c.json({
     success: true,
@@ -139,7 +139,7 @@ analyticsRoutes.get('/summary', requireAuth, async (c) => {
     throw new UnauthorizedError('Not authenticated');
   }
   
-  const summary = getDashboardSummary(authUser.userId);
+  const summary = await getDashboardSummary(authUser.userId);
   
   return c.json({
     success: true,
@@ -164,23 +164,23 @@ analyticsRoutes.get('/export', requireAuth, async (c) => {
   const days = daysStr ? parseInt(daysStr, 10) : 30;
   
   // Get memo history
-  const memos = listMemosByUser(authUser.userId, 1000);
+  const memos = await listMemosByUser(authUser.userId);
   
   // Get daily usage
-  const dailyUsage = getMemoCountsByDay(authUser.userId, days);
+  const dailyUsage = await getMemoCountsByDay(authUser.userId, days);
   
   // Build CSV for memos
   const memosCsv = [
     'ID,Date,Voice,Character Count,Duration (seconds),Audio URL',
     ...memos.map(m => 
-      `"${m.id}","${m.created_at}","${m.voice}",${m.character_count},${m.duration_seconds || 0},"${m.audio_url}"`
+      `"${m.id}","${m.created_at}","${m.voice || ''}",${m.character_count || 0},${m.duration_sec || 0},"${m.audio_url || ''}"`
     )
   ].join('\n');
   
   // Build CSV for daily usage
   const dailyCsv = [
     'Date,Calls,Characters',
-    ...dailyUsage.map(d => `"${d.date}",${d.count},${d.characters}`)
+    ...dailyUsage.map(d => `"${d.date}",${d.count},0`)
   ].join('\n');
   
   // Combine into sections
@@ -217,7 +217,7 @@ analyticsRoutes.get('/charts', requireAuth, async (c) => {
   const days = daysStr ? parseInt(daysStr, 10) : 7;
   
   // Get daily usage data
-  const dailyData = getMemoCountsByDay(authUser.userId, days);
+  const dailyData = await getMemoCountsByDay(authUser.userId, days);
   
   // Fill in missing days with zeros
   const chartData: Array<{ date: string; calls: number; characters: number }> = [];
@@ -232,7 +232,7 @@ analyticsRoutes.get('/charts', requireAuth, async (c) => {
     chartData.push({
       date: dateStr,
       calls: dayData?.count || 0,
-      characters: dayData?.characters || 0,
+      characters: 0,
     });
   }
   

@@ -6,7 +6,7 @@
 import { Context, Next } from 'hono';
 import { getAuthUser } from './auth.js';
 import { ForbiddenError, UnauthorizedError } from '../errors/index.js';
-import { getDb } from '../db/index.js';
+import { findUserById } from '../db/users.js';
 
 /**
  * Middleware to require admin role
@@ -20,10 +20,7 @@ export async function requireAdmin(c: Context, next: Next) {
   }
   
   // Check if user has admin role
-  const db = getDb();
-  const user = db.prepare(
-    'SELECT role FROM users WHERE id = ?'
-  ).get(authUser.userId) as { role: string } | undefined;
+  const user = await findUserById(authUser.userId);
   
   if (!user || user.role !== 'admin') {
     throw new ForbiddenError('Admin access required');
@@ -35,11 +32,7 @@ export async function requireAdmin(c: Context, next: Next) {
 /**
  * Check if a user is an admin
  */
-export function isAdmin(userId: string): boolean {
-  const db = getDb();
-  const user = db.prepare(
-    'SELECT role FROM users WHERE id = ?'
-  ).get(userId) as { role: string } | undefined;
-  
+export async function isAdmin(userId: string): Promise<boolean> {
+  const user = await findUserById(userId);
   return user?.role === 'admin';
 }

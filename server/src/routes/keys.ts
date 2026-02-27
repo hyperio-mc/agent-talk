@@ -65,7 +65,7 @@ keysRoutes.post('/', requireAuth, async (c) => {
   }
   
   try {
-    const result = createNewApiKey(authUser.userId, name, isTestKey);
+    const result = await createNewApiKey(authUser.userId, name, isTestKey);
     
     // Log key creation event
     logKeyCreated(authUser.userId, name || undefined);
@@ -102,7 +102,7 @@ keysRoutes.get('/', requireAuth, async (c) => {
     throw new UnauthorizedError('Not authenticated');
   }
   
-  const keys = listUserApiKeys(authUser.userId);
+  const keys = await listUserApiKeys(authUser.userId);
   
   return c.json({
     success: true,
@@ -131,7 +131,7 @@ keysRoutes.get('/:id', requireAuth, async (c) => {
   }
   
   const keyId = c.req.param('id');
-  const key = getApiKeyById(keyId, authUser.userId);
+  const key = await getApiKeyById(keyId, authUser.userId);
   
   if (!key) {
     throw new NotFoundError('API key');
@@ -165,22 +165,15 @@ keysRoutes.delete('/:id', requireAuth, async (c) => {
   
   const keyId = c.req.param('id');
   
-  try {
-    revokeUserApiKey(keyId, authUser.userId);
-    
-    // Log key revocation event
-    logKeyRevoked(authUser.userId, keyId);
-    
-    return c.json({
-      success: true,
-      message: 'API key revoked successfully',
-    });
-  } catch (error) {
-    if (error instanceof NotFoundError) {
-      throw new NotFoundError('API key');
-    }
-    throw error;
-  }
+  await revokeUserApiKey(keyId, authUser.userId);
+  
+  // Log key revocation event
+  logKeyRevoked(authUser.userId, keyId);
+  
+  return c.json({
+    success: true,
+    message: 'API key revoked successfully',
+  });
 });
 
 /**
@@ -196,22 +189,15 @@ keysRoutes.post('/:id/revoke', requireAuth, async (c) => {
   
   const keyId = c.req.param('id');
   
-  try {
-    revokeUserApiKey(keyId, authUser.userId);
-    
-    // Log key revocation event
-    logKeyRevoked(authUser.userId, keyId);
-    
-    return c.json({
-      success: true,
-      message: 'API key revoked successfully',
-    });
-  } catch (error) {
-    if (error instanceof NotFoundError) {
-      throw new NotFoundError('API key');
-    }
-    throw error;
-  }
+  await revokeUserApiKey(keyId, authUser.userId);
+  
+  // Log key revocation event
+  logKeyRevoked(authUser.userId, keyId);
+  
+  return c.json({
+    success: true,
+    message: 'API key revoked successfully',
+  });
 });
 
 /**
@@ -253,7 +239,7 @@ keysRoutes.patch('/:id', requireAuth, async (c) => {
   
   // Import update function
   const { updateApiKey } = await import('../db/keys.js');
-  const updated = updateApiKey(keyId, { name });
+  const updated = await updateApiKey(keyId, { name });
   
   if (!updated || updated.user_id !== authUser.userId) {
     throw new NotFoundError('API key');

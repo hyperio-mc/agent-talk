@@ -4,15 +4,15 @@
 
 import { randomBytes, createHash } from 'crypto';
 import {
-  createApiKey,
-  findApiKeyByHash,
-  findApiKeyById,
-  listApiKeysByUser,
+  createApiKeyRecord,
+  getApiKeyByKey,
+  findApiKeyByIdAsync,
+  getApiKeysByUserId,
   revokeApiKey as revokeApiKeyDb,
   deleteApiKey as deleteApiKeyDb,
   incrementKeyUsage,
   countApiKeysByUser,
-  CreateApiKeyInput,
+  listApiKeysByUser,
 } from '../db/keys.js';
 import { InvalidApiKeyError, RevokedKeyError, ForbiddenError, NotFoundError } from '../errors/index.js';
 
@@ -103,13 +103,13 @@ export function maskApiKey(key: string): string {
 /**
  * Create a new API key for a user
  */
-export function createNewApiKey(
+export async function createNewApiKey(
   userId: string,
-  name?: string,
+  name?: string | null,
   isTestKey: boolean = false
-): CreateKeyResult {
+): Promise<CreateKeyResult> {
   // Check key limit
-  const currentCount = countApiKeysByUser(userId);
+  const currentCount = await countApiKeysByUser(userId);
   if (currentCount >= MAX_KEYS_PER_USER) {
     throw new Error(`Maximum number of API keys (${MAX_KEYS_PER_USER}) reached`);
   }
@@ -119,14 +119,12 @@ export function createNewApiKey(
   const keyHash = hashApiKey(fullKey);
   
   // Store in database
-  const input: CreateApiKeyInput = {
+  const apiKey = await createApiKeyRecord({
     userId,
     keyHash,
     prefix,
-    name,
-  };
-  
-  const apiKey = createApiKey(input);
+    name: name || 'Default Key',
+  });
   
   return {
     id: apiKey.id,
@@ -141,7 +139,7 @@ export function createNewApiKey(
  * Validate an API key
  * Returns key info if valid, throws appropriate error if not
  */
-export function validateApiKey(key: string): { keyId: string; userId: string } {
+export async function validateApiKey(key: string): Promise<{ keyId: string; userId: string }> {
   // Check key format
   const prefix = getKeyPrefix(key);
   if (!prefix) {
@@ -150,7 +148,7 @@ export function validateApiKey(key: string): { keyId: string; userId: string } {
   
   // Hash and look up
   const keyHash = hashApiKey(key);
-  const apiKey = findApiKeyByHash(keyHash);
+  const apiKey = await getApiKeyByKey(keyHash);
   
   if (!apiKey) {
     throw new InvalidApiKeyError();
@@ -170,7 +168,7 @@ export function validateApiKey(key: string): { keyId: string; userId: string } {
  * Validate API key without throwing
  * Returns validation result for use in middleware
  */
-export function validateApiKeySafe(key: string): ApiKeyValidation {
+export async function validateApiKeySafe(key: string): Promise<ApiKeyValidation> {
   try {
     const prefix = getKeyPrefix(key);
     if (!prefix) {
@@ -178,7 +176,7 @@ export function validateApiKeySafe(key: string): ApiKeyValidation {
     }
     
     const keyHash = hashApiKey(key);
-    const apiKey = findApiKeyByHash(keyHash);
+    const apiKey = await getApiKeyByKey(keyHash);
     
     if (!apiKey) {
       return { isValid: false, error: 'Invalid API key' };
@@ -201,15 +199,15 @@ export function validateApiKeySafe(key: string): ApiKeyValidation {
 /**
  * Record usage of an API key
  */
-export function recordKeyUsage(keyId: string): void {
-  incrementKeyUsage(keyId);
+export async function recordKeyUsage(keyId: string): Promise<void> {
+  await incrementKeyUsage(keyId);
 }
 
 /**
  * List API keys for a user (masked)
  */
-export function listUserApiKeys(userId: string): MaskedKey[] {
-  const keys = listApiKeysByUser(userId);
+export async function listUserApiKeys(userId: string): Promise<MaskedKey[]> {
+  const keys = await listApiKeysByUser(userId);
   
   return keys.map(key => ({
     id: key.id,
@@ -227,8 +225,15 @@ export function listUserApiKeys(userId: string): MaskedKey[] {
 /**
  * Revoke an API key
  */
-export function revokeUserApiKey(keyId: string, userId: string): boolean {
-  const success = revokeApiKeyDb(keyId, userId);
+export async function revokeUserApiKey(keyId: string, userId: string): Promise<boolean> {
+  // Verify ownership first
+  const key = await findApiKeyByIdAsync(keyId);
+  
+  if (!key || key.user_id !== userId) {
+    throw new NotFoundError('API key');
+  }
+  
+  const success = await revokeApiKeyDb(keyId);
   
   if (!success) {
     throw new NotFoundError('API key');
@@ -240,8 +245,15 @@ export function revokeUserApiKey(keyId: string, userId: string): boolean {
 /**
  * Delete an API key permanently
  */
-export function deleteUserApiKey(keyId: string, userId: string): boolean {
-  const success = deleteApiKeyDb(keyId, userId);
+export async function deleteUserApiKey(keyId: string, userId: string): Promise<boolean> {
+  // Verify ownership first
+  const key = await findApiKeyByIdAsync(keyId);
+  
+  if (!key || key.user_id !== userId) {
+    throw new NotFoundError('API key');
+  }
+  
+  const success = await deleteApiKeyDb(keyId);
   
   if (!success) {
     throw new NotFoundError('API key');
@@ -253,8 +265,8 @@ export function deleteUserApiKey(keyId: string, userId: string): boolean {
 /**
  * Get a single API key by ID (masked)
  */
-export function getApiKeyById(keyId: string, userId: string): MaskedKey | null {
-  const key = findApiKeyById(keyId);
+export async function getApiKeyById(keyId: string, userId: string): Promise<MaskedKey | null> {
+  const key = await findApiKeyByIdAsync(keyId);
   
   if (!key || key.user_id !== userId) {
     return null;

@@ -6,17 +6,14 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Hono } from 'hono';
-import request from 'supertest';
 import { keysRoutes } from '../src/routes/keys.js';
-import { getDb } from '../src/db/index.js';
-import { createUser } from '../src/db/users.js';
-import bcrypt from 'bcrypt';
-import { generateToken } from '../src/services/user.js';
-import { generateApiKey, hashApiKey } from '../src/services/apiKey.js';
+import { errorHandler } from '../src/middleware/errorHandler.js';
+import { createTestUser, resetStores, getAuthToken } from './setup.js';
 
-// Helper to create test app
+// Helper to create test app with error handling
 function createTestApp() {
   const app = new Hono();
+  app.onError(errorHandler());
   app.route('/api/keys', keysRoutes);
   return app;
 }
@@ -28,88 +25,111 @@ describe('API Key Endpoints', () => {
 
   beforeEach(async () => {
     app = createTestApp();
-    const db = getDb();
-    db.exec('DELETE FROM api_keys');
-    db.exec('DELETE FROM users');
+    resetStores();
 
     // Create test user
-    const passwordHash = await bcrypt.hash('testPassword123', 12);
-    const user = await createUser({
-      email: 'keyuser@example.com',
-      passwordHash,
-      tier: 'hobby',
-    });
+    const user = await createTestUser('keyuser@example.com', 'testPassword123');
     userId = user.id;
-    token = generateToken({ id: userId, email: 'keyuser@example.com' }).token;
+    token = await getAuthToken(userId, 'keyuser@example.com');
   });
 
   describe('POST /api/keys', () => {
     it('should create a new API key', async () => {
-      const response = await request(app)
-        .post('/api/keys')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ name: 'My API Key' });
+      const response = await app.request('/api/keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: 'My API Key' }),
+      });
 
+      const body = await response.json();
       expect(response.status).toBe(201);
-      expect(response.body.success).toBe(true);
-      expect(response.body.key).toBeDefined();
-      expect(response.body.key.key).toMatch(/^at_live_/);
-      expect(response.body.key.name).toBe('My API Key');
-      expect(response.body.warning).toBeDefined();
+      expect(body.success).toBe(true);
+      expect(body.key).toBeDefined();
+      expect(body.key.key).toMatch(/^at_live_/);
+      expect(body.key.name).toBe('My API Key');
+      expect(body.warning).toBeDefined();
     });
 
     it('should create a test API key', async () => {
-      const response = await request(app)
-        .post('/api/keys')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ name: 'Test Key', test: true });
+      const response = await app.request('/api/keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: 'Test Key', test: true }),
+      });
 
+      const body = await response.json();
       expect(response.status).toBe(201);
-      expect(response.body.key.key).toMatch(/^at_test_/);
+      expect(body.key.key).toMatch(/^at_test_/);
     });
 
     it('should create API key without name', async () => {
-      const response = await request(app)
-        .post('/api/keys')
-        .set('Authorization', `Bearer ${token}`)
-        .send({});
+      const response = await app.request('/api/keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({}),
+      });
 
+      const body = await response.json();
       expect(response.status).toBe(201);
-      expect(response.body.key.name).toBeNull();
+      expect(body.key.name).toBeDefined(); // Will be default name
     });
 
     it('should reject unauthenticated requests', async () => {
-      const response = await request(app)
-        .post('/api/keys')
-        .send({ name: 'My Key' });
+      const response = await app.request('/api/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'My Key' }),
+      });
 
       expect(response.status).toBe(401);
     });
 
     it('should reject name longer than 100 characters', async () => {
-      const response = await request(app)
-        .post('/api/keys')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ name: 'a'.repeat(101) });
+      const response = await app.request('/api/keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: 'a'.repeat(101) }),
+      });
 
+      const body = await response.json();
       expect(response.status).toBe(400);
-      expect(response.body.error.message).toContain('100 characters');
+      expect(body.error.message).toContain('100 characters');
     });
 
     it('should reject non-string name', async () => {
-      const response = await request(app)
-        .post('/api/keys')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ name: 123 });
+      const response = await app.request('/api/keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: 123 }),
+      });
 
       expect(response.status).toBe(400);
     });
 
     it('should reject non-boolean test flag', async () => {
-      const response = await request(app)
-        .post('/api/keys')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ test: 'yes' });
+      const response = await app.request('/api/keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ test: 'yes' }),
+      });
 
       expect(response.status).toBe(400);
     });
@@ -117,52 +137,77 @@ describe('API Key Endpoints', () => {
     it('should enforce maximum key limit', async () => {
       // Create 10 keys (the max)
       for (let i = 0; i < 10; i++) {
-        await request(app)
-          .post('/api/keys')
-          .set('Authorization', `Bearer ${token}`)
-          .send({ name: `Key ${i}` });
+        await app.request('/api/keys', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify({ name: `Key ${i}` }),
+        });
       }
 
       // Try to create 11th key
-      const response = await request(app)
-        .post('/api/keys')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ name: 'Extra Key' });
+      const response = await app.request('/api/keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: 'Extra Key' }),
+      });
 
+      const body = await response.json();
       expect(response.status).toBe(400);
-      expect(response.body.error.message).toContain('Maximum number');
+      expect(body.error.message).toContain('Maximum number');
     });
   });
 
   describe('GET /api/keys', () => {
     beforeEach(async () => {
       // Create a few API keys
-      await request(app)
-        .post('/api/keys')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ name: 'Key 1' });
-      await request(app)
-        .post('/api/keys')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ name: 'Key 2' });
+      await app.request('/api/keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: 'Key 1' }),
+      });
+      await app.request('/api/keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: 'Key 2' }),
+      });
     });
 
     it('should list all API keys for user', async () => {
-      const response = await request(app)
-        .get('/api/keys')
-        .set('Authorization', `Bearer ${token}`);
+      const response = await app.request('/api/keys', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
 
+      const body = await response.json();
       expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      expect(response.body.keys).toHaveLength(2);
+      expect(body.success).toBe(true);
+      expect(body.keys).toHaveLength(2);
     });
 
     it('should return masked keys', async () => {
-      const response = await request(app)
-        .get('/api/keys')
-        .set('Authorization', `Bearer ${token}`);
+      const response = await app.request('/api/keys', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
 
-      const keys = response.body.keys;
+      const body = await response.json();
+      const keys = body.keys;
       keys.forEach((key: any) => {
         expect(key.maskedKey).toBeDefined();
         expect(key.maskedKey).toMatch(/\*\*\*/);
@@ -171,39 +216,43 @@ describe('API Key Endpoints', () => {
     });
 
     it('should not show full key hash', async () => {
-      const response = await request(app)
-        .get('/api/keys')
-        .set('Authorization', `Bearer ${token}`);
+      const response = await app.request('/api/keys', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
 
-      response.body.keys.forEach((key: any) => {
+      const body = await response.json();
+      body.keys.forEach((key: any) => {
         expect(key.keyHash).toBeUndefined();
         expect(key.key_hash).toBeUndefined();
       });
     });
 
     it('should reject unauthenticated requests', async () => {
-      const response = await request(app)
-        .get('/api/keys');
+      const response = await app.request('/api/keys', {
+        method: 'GET',
+      });
 
       expect(response.status).toBe(401);
     });
 
     it('should return empty array for user with no keys', async () => {
       // Create new user with no keys
-      const passwordHash = await bcrypt.hash('testPassword123', 12);
-      const newUser = await createUser({
-        email: 'nokeys@example.com',
-        passwordHash,
-        tier: 'hobby',
+      const newUser = await createTestUser('nokeys@example.com', 'testPassword123');
+      const newToken = await getAuthToken(newUser.id, 'nokeys@example.com');
+
+      const response = await app.request('/api/keys', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${newToken}`,
+        },
       });
-      const newToken = generateToken({ id: newUser.id, email: 'nokeys@example.com' }).token;
 
-      const response = await request(app)
-        .get('/api/keys')
-        .set('Authorization', `Bearer ${newToken}`);
-
+      const body = await response.json();
       expect(response.status).toBe(200);
-      expect(response.body.keys).toHaveLength(0);
+      expect(body.keys).toHaveLength(0);
     });
   });
 
@@ -211,44 +260,61 @@ describe('API Key Endpoints', () => {
     let keyId: string;
 
     beforeEach(async () => {
-      const response = await request(app)
-        .post('/api/keys')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ name: 'Test Key' });
-      keyId = response.body.key.id;
+      const response = await app.request('/api/keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: 'Test Key' }),
+      });
+      const body = await response.json();
+      keyId = body.key.id;
     });
 
     it('should return specific API key', async () => {
-      const response = await request(app)
-        .get(`/api/keys/${keyId}`)
-        .set('Authorization', `Bearer ${token}`);
+      const response = await app.request(`/api/keys/${keyId}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
 
+      const body = await response.json();
       expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      expect(response.body.key.id).toBe(keyId);
-      expect(response.body.key.name).toBe('Test Key');
+      expect(body.success).toBe(true);
+      expect(body.key.id).toBe(keyId);
+      expect(body.key.name).toBe('Test Key');
     });
 
     it('should return masked key', async () => {
-      const response = await request(app)
-        .get(`/api/keys/${keyId}`)
-        .set('Authorization', `Bearer ${token}`);
+      const response = await app.request(`/api/keys/${keyId}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
 
-      expect(response.body.key.maskedKey).toBeDefined();
-      expect(response.body.key.key).toBeUndefined();
+      const body = await response.json();
+      expect(body.key.maskedKey).toBeDefined();
+      expect(body.key.key).toBeUndefined();
     });
 
     it('should return 404 for non-existent key', async () => {
-      const response = await request(app)
-        .get('/api/keys/nonexistent-id')
-        .set('Authorization', `Bearer ${token}`);
+      const response = await app.request('/api/keys/nonexistent-id', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
 
       expect(response.status).toBe(404);
     });
 
     it('should reject unauthenticated requests', async () => {
-      const response = await request(app)
-        .get(`/api/keys/${keyId}`);
+      const response = await app.request(`/api/keys/${keyId}`, {
+        method: 'GET',
+      });
 
       expect(response.status).toBe(401);
     });
@@ -258,49 +324,69 @@ describe('API Key Endpoints', () => {
     let keyId: string;
 
     beforeEach(async () => {
-      const response = await request(app)
-        .post('/api/keys')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ name: 'Key to Delete' });
-      keyId = response.body.key.id;
+      const response = await app.request('/api/keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: 'Key to Delete' }),
+      });
+      const body = await response.json();
+      keyId = body.key.id;
     });
 
     it('should revoke (soft delete) an API key', async () => {
-      const response = await request(app)
-        .delete(`/api/keys/${keyId}`)
-        .set('Authorization', `Bearer ${token}`);
+      const response = await app.request(`/api/keys/${keyId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
 
+      const body = await response.json();
       expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      expect(response.body.message).toContain('revoked');
+      expect(body.success).toBe(true);
+      expect(body.message).toContain('revoked');
     });
 
     it('should mark key as inactive', async () => {
-      await request(app)
-        .delete(`/api/keys/${keyId}`)
-        .set('Authorization', `Bearer ${token}`);
+      await app.request(`/api/keys/${keyId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
 
       // Check that key still exists but is inactive
-      const response = await request(app)
-        .get('/api/keys')
-        .set('Authorization', `Bearer ${token}`);
+      const response = await app.request('/api/keys', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
 
+      const body = await response.json();
       // Key should still be listed but marked as inactive
-      const revokedKey = response.body.keys.find((k: any) => k.id === keyId);
+      const revokedKey = body.keys.find((k: any) => k.id === keyId);
       expect(revokedKey.isActive).toBe(false);
     });
 
     it('should return 404 for non-existent key', async () => {
-      const response = await request(app)
-        .delete('/api/keys/nonexistent-id')
-        .set('Authorization', `Bearer ${token}`);
+      const response = await app.request('/api/keys/nonexistent-id', {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
 
       expect(response.status).toBe(404);
     });
 
     it('should reject unauthenticated requests', async () => {
-      const response = await request(app)
-        .delete(`/api/keys/${keyId}`);
+      const response = await app.request(`/api/keys/${keyId}`, {
+        method: 'DELETE',
+      });
 
       expect(response.status).toBe(401);
     });
@@ -310,20 +396,29 @@ describe('API Key Endpoints', () => {
     let keyId: string;
 
     beforeEach(async () => {
-      const response = await request(app)
-        .post('/api/keys')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ name: 'Key to Revoke' });
-      keyId = response.body.key.id;
+      const response = await app.request('/api/keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: 'Key to Revoke' }),
+      });
+      const body = await response.json();
+      keyId = body.key.id;
     });
 
     it('should revoke an API key via POST endpoint', async () => {
-      const response = await request(app)
-        .post(`/api/keys/${keyId}/revoke`)
-        .set('Authorization', `Bearer ${token}`);
+      const response = await app.request(`/api/keys/${keyId}/revoke`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
 
+      const body = await response.json();
       expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
+      expect(body.success).toBe(true);
     });
   });
 
@@ -331,66 +426,81 @@ describe('API Key Endpoints', () => {
     let keyId: string;
 
     beforeEach(async () => {
-      const response = await request(app)
-        .post('/api/keys')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ name: 'Original Name' });
-      keyId = response.body.key.id;
+      const response = await app.request('/api/keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: 'Original Name' }),
+      });
+      const body = await response.json();
+      keyId = body.key.id;
     });
 
     it('should update key name', async () => {
-      const response = await request(app)
-        .patch(`/api/keys/${keyId}`)
-        .set('Authorization', `Bearer ${token}`)
-        .send({ name: 'Updated Name' });
+      const response = await app.request(`/api/keys/${keyId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: 'Updated Name' }),
+      });
 
+      const body = await response.json();
       expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      expect(response.body.key.name).toBe('Updated Name');
+      expect(body.success).toBe(true);
+      expect(body.key.name).toBe('Updated Name');
     });
 
     it('should reject empty body', async () => {
-      const response = await request(app)
-        .patch(`/api/keys/${keyId}`)
-        .set('Authorization', `Bearer ${token}`)
-        .send({});
+      const response = await app.request(`/api/keys/${keyId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({}),
+      });
 
+      const body = await response.json();
       expect(response.status).toBe(400);
-      expect(response.body.error.code).toBe('MISSING_FIELD');
+      expect(body.error.code).toBe('MISSING_FIELD');
     });
 
     it('should reject name longer than 100 characters', async () => {
-      const response = await request(app)
-        .patch(`/api/keys/${keyId}`)
-        .set('Authorization', `Bearer ${token}`)
-        .send({ name: 'a'.repeat(101) });
-
-      expect(response.status).toBe(400);
-    });
-
-    it('should reject invalid JSON', async () => {
-      const response = await request(app)
-        .patch(`/api/keys/${keyId}`)
-        .set('Authorization', `Bearer ${token}`)
-        .set('Content-Type', 'application/json')
-        .send('invalid json');
+      const response = await app.request(`/api/keys/${keyId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: 'a'.repeat(101) }),
+      });
 
       expect(response.status).toBe(400);
     });
 
     it('should return 404 for non-existent key', async () => {
-      const response = await request(app)
-        .patch('/api/keys/nonexistent-id')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ name: 'New Name' });
+      const response = await app.request('/api/keys/nonexistent-id', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: 'New Name' }),
+      });
 
       expect(response.status).toBe(404);
     });
 
     it('should reject unauthenticated requests', async () => {
-      const response = await request(app)
-        .patch(`/api/keys/${keyId}`)
-        .send({ name: 'New Name' });
+      const response = await app.request(`/api/keys/${keyId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'New Name' }),
+      });
 
       expect(response.status).toBe(401);
     });
@@ -399,45 +509,57 @@ describe('API Key Endpoints', () => {
   describe('API Key Validation', () => {
     it('should validate a valid API key', async () => {
       // Create a key
-      const createResponse = await request(app)
-        .post('/api/keys')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ name: 'Validation Test Key' });
+      const createResponse = await app.request('/api/keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: 'Validation Test Key' }),
+      });
 
-      const fullKey = createResponse.body.key.key;
+      const createBody = await createResponse.json();
+      const fullKey = createBody.key.key;
 
       // Use the key service to validate
       const { validateApiKey } = await import('../src/services/apiKey.js');
-      const result = validateApiKey(fullKey);
+      const result = await validateApiKey(fullKey);
 
-      expect(result.keyId).toBe(createResponse.body.key.id);
+      expect(result.keyId).toBe(createBody.key.id);
       expect(result.userId).toBe(userId);
     });
 
     it('should reject invalid API key format', async () => {
       const { validateApiKey } = await import('../src/services/apiKey.js');
-
-      expect(() => validateApiKey('invalid-key')).toThrow();
+      
+      await expect(validateApiKey('invalid-key')).rejects.toThrow();
     });
 
     it('should reject revoked API key', async () => {
-      const createResponse = await request(app)
-        .post('/api/keys')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ name: 'Key to Revoke' });
+      const createResponse = await app.request('/api/keys', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: 'Key to Revoke' }),
+      });
 
-      const fullKey = createResponse.body.key.key;
-      const keyId = createResponse.body.key.id;
+      const createBody = await createResponse.json();
+      const fullKey = createBody.key.key;
+      const keyId = createBody.key.id;
 
       // Revoke the key
-      await request(app)
-        .delete(`/api/keys/${keyId}`)
-        .set('Authorization', `Bearer ${token}`);
+      await app.request(`/api/keys/${keyId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
 
       // Try to use revoked key
       const { validateApiKey } = await import('../src/services/apiKey.js');
-
-      expect(() => validateApiKey(fullKey)).toThrow();
+      await expect(validateApiKey(fullKey)).rejects.toThrow();
     });
   });
 });

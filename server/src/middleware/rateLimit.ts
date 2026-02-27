@@ -17,6 +17,7 @@ import {
 } from '../services/rateLimit.js';
 import { DailyLimitExceededError } from '../errors/index.js';
 import { findUserById } from '../db/users.js';
+import { isAdmin } from './admin.js';
 
 // Extend Hono's context with rate limit info
 declare module 'hono' {
@@ -53,6 +54,15 @@ export async function rateLimitMiddleware(c: Context, next: Next) {
   
   const { keyId, userId } = apiKeyInfo;
   
+  // Admin bypass - admins are not rate limited
+  if (await isAdmin(userId)) {
+    c.header('X-RateLimit-Limit', 'unlimited');
+    c.header('X-RateLimit-Remaining', 'unlimited');
+    c.header('X-RateLimit-Reset', String(Math.floor(getNextMidnightUTC().getTime() / 1000)));
+    await next();
+    return;
+  }
+  
   // Get user to determine tier
   const user = await findUserById(userId);
   if (!user) {
@@ -63,8 +73,8 @@ export async function rateLimitMiddleware(c: Context, next: Next) {
   
   const tier = user.tier as Tier;
   
-  // Check rate limit
-  const result = checkRateLimit(keyId, userId, tier);
+  // Check rate limit (async - fetches actual usage from db)
+  const result = await checkRateLimit(keyId, userId, tier);
   
   // Add rate limit headers to response
   const headers = getRateLimitHeaders(result.info);
@@ -96,7 +106,7 @@ export async function rateLimitMiddleware(c: Context, next: Next) {
   
   // After the request is processed successfully, increment usage
   // Only increment if the request didn't throw an error
-  incrementUsage(keyId, userId);
+  await incrementUsage(keyId, userId);
 }
 
 /**
@@ -114,10 +124,19 @@ export async function simpleRateLimit(
     return; // Skip rate limiting if user not found
   }
   
+  // Admin bypass - admins are not rate limited
+  if (await isAdmin(userId)) {
+    // Set unlimited headers for admin users
+    c.header('X-RateLimit-Limit', 'unlimited');
+    c.header('X-RateLimit-Remaining', 'unlimited');
+    c.header('X-RateLimit-Reset', String(Math.floor(getNextMidnightUTC().getTime() / 1000)));
+    return;
+  }
+  
   const tier = user.tier as Tier;
   
-  // Check rate limit first
-  const result = checkRateLimit(keyId, userId, tier);
+  // Check rate limit first (async - gets actual usage from db)
+  const result = await checkRateLimit(keyId, userId, tier);
   
   // Add rate limit headers to response
   const headers = getRateLimitHeaders(result.info);
@@ -137,11 +156,10 @@ export async function simpleRateLimit(
   }
   
   // Increment usage immediately
-  incrementUsage(keyId, userId);
+  const newCount = await incrementUsage(keyId, userId);
   
   // Update remaining header after increment
-  const newUsed = result.info.used + 1;
-  const newRemaining = result.info.limit === -1 ? -1 : Math.max(0, result.info.limit - newUsed);
+  const newRemaining = result.info.limit === -1 ? -1 : Math.max(0, result.info.limit - newCount);
   c.header('X-RateLimit-Remaining', newRemaining === -1 ? 'unlimited' : String(newRemaining));
 }
 
@@ -149,17 +167,17 @@ export async function simpleRateLimit(
  * Get rate limit info for a specific user/key
  * Useful for displaying usage in UI
  */
-export function getRateLimitStatus(
+export async function getRateLimitStatus(
   userId: string,
   tier: Tier
-): {
+): Promise<{
   limit: number;
   used: number;
   remaining: number;
   resetAt: Date;
-} {
+}> {
   const limit = TIER_LIMITS[tier];
-  const used = getUserUsageCount(userId);
+  const used = await getUserUsageCount(userId);
   const remaining = limit === Infinity ? -1 : Math.max(0, limit - used);
   const resetAt = getNextMidnightUTC();
   

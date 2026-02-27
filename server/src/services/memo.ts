@@ -1,10 +1,18 @@
 /**
  * Memo Service - Text-to-speech conversion with ElevenLabs and Edge TTS
+ * 
+ * Supports multiple TTS backends:
+ * - elevenlabs: Uses ElevenLabs API via HYPR proxy (production)
+ * - edge: Free Edge TTS (no API key required)
+ * - simulation: Silent placeholder for testing
+ * 
+ * @see HYPR-REFACTOR-PLAN.md Phase 2
  */
 
 import { logger } from '../utils/logger.js';
 import { getStorage, initStorage } from './storage.js';
 import { getEdgeTTSService, EDGE_VOICE_MAPPINGS } from './edgeTTS.js';
+import { getProxyClient } from '../lib/hypr-proxy.js';
 
 export interface Voice {
   id: string;
@@ -139,14 +147,18 @@ const VOICES: Record<string, VoiceMapping> = {
 
 export class MemoService {
   private ttsMode: TTSService;
-  private apiKey: string | null;
-  private apiBaseUrl: string = 'https://api.elevenlabs.io/v1';
+  private useHyprProxy: boolean;
 
-  constructor(ttsMode: TTSService = 'simulation', apiKey?: string) {
+  constructor(ttsMode: TTSService = 'simulation', _apiKey?: string) {
     this.ttsMode = ttsMode;
-    this.apiKey = apiKey || null;
+    // Use HYPR proxy in production mode or when explicitly set
+    this.useHyprProxy = process.env.HYPR_MODE === 'production' || 
+                         process.env.USE_HYPR_PROXY === 'true';
     
-    logger.debug('MemoService initialized', { ttsMode: this.ttsMode });
+    logger.debug('MemoService initialized', { 
+      ttsMode: this.ttsMode, 
+      useHyprProxy: this.useHyprProxy 
+    });
   }
 
   /**
@@ -189,7 +201,8 @@ export class MemoService {
     logger.debug('Creating memo', { 
       voice: voiceName, 
       textLength: text.length,
-      textPreview: text.substring(0, 100) + (text.length > 100 ? '...' : '')
+      textPreview: text.substring(0, 100) + (text.length > 100 ? '...' : ''),
+      useHyprProxy: this.useHyprProxy
     });
 
     // Generate audio
@@ -202,7 +215,7 @@ export class MemoService {
     const storage = getStorage();
     const uploadResult = await storage.upload(audioBuffer, 'mp3');
     
-    // Use the URL from storage service (not base64)
+    // Use the URL from storage service
     const audioUrl = uploadResult.url;
 
     const memo: Memo = {
@@ -222,7 +235,7 @@ export class MemoService {
       createdAt: new Date().toISOString()
     };
 
-    logger.info('Memo created', { memoId, voice: voiceName, duration: memo.audio.duration, audioUrl });
+    logger.info('Memo created', { memoId, voice: voiceName, duration: memo.audio.duration, audioUrl, mode: this.ttsMode });
     return memo;
   }
 
@@ -243,22 +256,79 @@ export class MemoService {
 
   /**
    * Generate audio using ElevenLabs API
+   * Routes through HYPR proxy in production mode
    */
   private async generateElevenLabsAudio(text: string, voiceId: string): Promise<ArrayBuffer> {
-    if (!this.apiKey) {
-      logger.warn('No ElevenLabs API key, using simulation');
+    try {
+      // Use HYPR proxy if enabled
+      if (this.useHyprProxy) {
+        return this.generateElevenLabsViaProxy(text, voiceId);
+      }
+
+      // Direct API call (legacy mode, requires ELEVENLABS_API_KEY env var)
+      return this.generateElevenLabsDirect(text, voiceId);
+    } catch (error) {
+      logger.error('Failed to generate ElevenLabs audio', {
+        error: { name: 'TTSError', message: error instanceof Error ? error.message : 'Unknown error' },
+        useHyprProxy: this.useHyprProxy
+      });
+      // Fallback to simulation
+      return this.generateSimulationAudio(text);
+    }
+  }
+
+  /**
+   * Generate ElevenLabs audio via HYPR proxy
+   * This uses the HYPR platform's secret injection for secure API access
+   */
+  private async generateElevenLabsViaProxy(text: string, voiceId: string): Promise<ArrayBuffer> {
+    logger.debug('Generating ElevenLabs audio via HYPR proxy', { voiceId });
+
+    try {
+      const proxyClient = getProxyClient();
+      const audioBuffer = await proxyClient.elevenLabsTTS({
+        voiceId,
+        text,
+        modelId: 'eleven_monolingual_v1',
+        stability: 0.5,
+        similarityBoost: 0.75,
+      });
+
+      logger.info('ElevenLabs audio generated via HYPR proxy', { 
+        voiceId, 
+        size: audioBuffer.byteLength 
+      });
+
+      return audioBuffer;
+    } catch (error) {
+      logger.error('HYPR proxy TTS failed, falling back to simulation', {
+        error: { name: 'ProxyError', message: error instanceof Error ? error.message : 'Unknown error' }
+      });
+      return this.generateSimulationAudio(text);
+    }
+  }
+
+  /**
+   * Generate ElevenLabs audio with direct API call (legacy)
+   * Requires ELEVENLABS_API_KEY environment variable
+   */
+  private async generateElevenLabsDirect(text: string, voiceId: string): Promise<ArrayBuffer> {
+    const apiKey = process.env.ELEVENLABS_API_KEY;
+    
+    if (!apiKey) {
+      logger.warn('No ElevenLabs API key, falling back to simulation');
       return this.generateSimulationAudio(text);
     }
 
     try {
       const response = await fetch(
-        `${this.apiBaseUrl}/text-to-speech/${voiceId}`,
+        `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
         {
           method: 'POST',
           headers: {
             'Accept': 'audio/mpeg',
             'Content-Type': 'application/json',
-            'xi-api-key': this.apiKey
+            'xi-api-key': apiKey
           },
           body: JSON.stringify({
             text,
@@ -280,12 +350,11 @@ export class MemoService {
         throw new Error(`ElevenLabs API error: ${response.status}`);
       }
 
-      logger.info('ElevenLabs audio generated', { voiceId });
+      logger.info('ElevenLabs audio generated (direct API)', { voiceId });
       return response.arrayBuffer();
     } catch (error) {
-      logger.error('Failed to generate ElevenLabs audio');
-      // Fallback to simulation
-      return this.generateSimulationAudio(text);
+      logger.error('Direct ElevenLabs API call failed', { error: { name: 'ApiError', message: error instanceof Error ? error.message : 'Unknown error' } });
+      throw error;
     }
   }
 
@@ -329,7 +398,7 @@ export class MemoService {
   private async generateSimulationAudio(text: string): Promise<ArrayBuffer> {
     // Create a minimal valid MP3 file with ~1 second of silence
     // This is a proper MP3 header + silent frame
-    const silentMp3Base64 = '//uQxAAAAAANIAAAAAExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVY=';
+    const silentMp3Base64 = '//uQxAAAAAANIAAAAAExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVY=';
     
     // Decode base64 to buffer
     const binaryString = Buffer.from(silentMp3Base64, 'base64').toString('binary');
@@ -361,17 +430,5 @@ export class MemoService {
     const words = text.length / avgWordLength;
     const minutes = words / wordsPerMinute;
     return Math.round(minutes * 60 * 10) / 10; // Round to 1 decimal
-  }
-
-  /**
-   * Convert ArrayBuffer to base64
-   */
-  private bufferToBase64(buffer: ArrayBuffer): string {
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
   }
 }

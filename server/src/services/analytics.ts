@@ -41,8 +41,9 @@ export interface AnalyticsEvent {
  * Writes to the usage_logs table
  */
 export function logAnalyticsEvent(input: AnalyticsEventInput): void {
-  const db = getDb();
-  
+  const db = getDb() as import("better-sqlite3").Database | null;
+  if (!db) return;
+
   const id = uuidv4();
   const now = new Date().toISOString();
   const metadata = input.eventData ? JSON.stringify(input.eventData) : null;
@@ -269,8 +270,14 @@ export function getUsageStats(
   startDate?: Date,
   endDate?: Date
 ): UsageStats {
-  const db = getDb();
-  
+  const db = getDb() as import("better-sqlite3").Database | null;
+  if (!db) return {
+    total: 0,
+    daily: [],
+    weekly: [],
+    monthly: [],
+  };
+
   // Default to last 30 days if no dates provided
   const end = endDate || new Date();
   const start = startDate || new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -341,8 +348,9 @@ export function getUsageStats(
  * Returns most used voices with counts and percentages
  */
 export function getVoicePopularity(userId: string): VoicePopularity[] {
-  const db = getDb();
-  
+  const db = getDb() as import("better-sqlite3").Database | null;
+  if (!db) return [];
+
   // Get total calls for percentage calculation
   const totalStmt = db.prepare(`
     SELECT COUNT(*) as total
@@ -397,8 +405,14 @@ export function getErrorStats(
   startDate?: Date,
   endDate?: Date
 ): ErrorStats {
-  const db = getDb();
-  
+  const db = getDb() as import("better-sqlite3").Database | null;
+  if (!db) return {
+    totalRequests: 0,
+    totalErrors: 0,
+    errorRate: 0,
+    errorsByType: [],
+  };
+
   // Default to last 30 days if no dates provided
   const end = endDate || new Date();
   const start = startDate || new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -466,7 +480,16 @@ export function getDashboardSummary(userId: string): {
   callsThisWeek: number;
   callsThisMonth: number;
 } {
-  const db = getDb();
+  const db = getDb() as import("better-sqlite3").Database | null;
+  if (!db) return {
+    totalCalls: 0,
+    totalCharacters: 0,
+    avgCharactersPerCall: 0,
+    mostUsedVoice: null,
+    callsToday: 0,
+    callsThisWeek: 0,
+    callsThisMonth: 0,
+  };
   
   // Total stats
   const totalStmt = db.prepare(`

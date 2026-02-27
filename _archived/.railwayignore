@@ -1,14 +1,14 @@
 # Dependencies (rebuilt in Docker)
-node_modules/
-server/node_modules/
+node_modules
+**/node_modules
 
 # Build outputs (rebuilt in Docker)
-dist/
-server/dist/
+dist
+**/dist
 
 # Development files
-.vscode/
-.idea/
+.vscode
+.idea
 *.md
 !README.md
 ORCHESTRATOR.md
@@ -16,12 +16,14 @@ orchestrate.sh
 orchestrator.py
 
 # Test files
-server/tests/
+server/tests
 **/*.test.ts
 **/*.spec.ts
+server/test-*.ts
+server/test-*.mjs
 
 # Database files
-data/
+data
 *.db
 *.db-journal
 *.db-wal
@@ -33,24 +35,39 @@ data/
 *.webm
 
 # Logs
-logs/
+logs
 *.log
 
 # Environment files
 .env
 .env.*
+!.env.example
 
 # OS files
 .DS_Store
 Thumbs.db
 
 # Git
-.git/
+.git
+.gitignore
 
-# SDK
-sdk/
+# Docker
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Railway
+railway.toml
+.railwayignore
+
+# SDK (not needed in production)
+sdk
 
 # Tasks and docs
-tasks/
-docs/
+tasks
+docs
 dashboard.html
+
+# Orchestrator (dev only)
+orchestrator.py
+orchestrate.sh

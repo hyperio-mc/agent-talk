@@ -35,8 +35,18 @@ curl -X POST https://talk.onhyper.io/api/v1/memo \
 | [Quick Start Guide](./quick-start.md) | Get started in 5 minutes |
 | [Authentication](./authentication.md) | API keys and user authentication |
 | [Endpoints Reference](./endpoints.md) | Full API endpoint documentation |
+| [Voices Reference](./voices.md) | Available voices with descriptions and use cases |
+| [Rate Limits](./rate-limits.md) | Usage limits by tier |
 | [Error Codes](./errors.md) | Error handling and status codes |
 | [Code Examples](./examples.md) | cURL, JavaScript, and Python examples |
+
+## OpenAPI Specification
+
+The full API specification is available in OpenAPI 3.1 format:
+
+- **YAML:** [`openapi.yaml`](./openapi.yaml)
+- **View with Swagger UI:** Paste the YAML into [editor.swagger.io](https://editor.swagger.io)
+- **View with Redoc:** Use [redocly.com/redoc](https://redocly.com/redoc)
 
 ## API Overview
 

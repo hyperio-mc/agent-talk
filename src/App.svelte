@@ -192,6 +192,11 @@ return {
         throw new Error(data.message || data.error || 'Signup failed');
       }
       
+      // Store the auth token
+      if (data.token) {
+        localStorage.setItem('auth_token', data.token);
+      }
+      
       // Use the API key from the response
       if (data.apiKey && data.apiKey.key) {
         apiKey = data.apiKey.key;
@@ -659,7 +664,7 @@ return {
             <p class="api-key-note">Save this key! You won't be able to see it again.</p>
           </div>
           
-          <button class="btn-primary" on:click={closeSignup}>Start Building →</button>
+          <button class="btn-primary" on:click={() => { closeSignup(); window.location.href = '/dashboard.html'; }}>Go to Dashboard →</button>
         </div>
       {:else}
         <button class="modal-close" on:click={closeSignup} aria-label="Close">×</button>

@@ -23,12 +23,20 @@ import {
   getClearCookieOptions 
 } from '../middleware/auth.js';
 import { 
+  loginRateLimit, 
+  signupRateLimit, 
+  passwordResetRateLimit,
+  recordFailedLogin,
+  clearLoginRateLimit 
+} from '../middleware/authRateLimit.js';
+import { 
   ValidationError, 
   MissingFieldError, 
   UnauthorizedError,
   NotFoundError,
   InternalError
 } from '../errors/index.js';
+import { sanitizeEmail, sanitizeText } from '../utils/sanitize.js';
 
 export const authRoutes = new Hono();
 
@@ -36,7 +44,7 @@ export const authRoutes = new Hono();
  * POST /api/v1/auth/signup
  * Create a new user account
  */
-authRoutes.post('/signup', async (c) => {
+authRoutes.post('/signup', signupRateLimit, async (c) => {
   // Parse and validate request body
   let body: { email?: unknown; password?: unknown };
   try {
@@ -61,13 +69,16 @@ authRoutes.post('/signup', async (c) => {
     throw new ValidationError('Password must be a string', { field: 'password' });
   }
   
+  // Sanitize input
+  const sanitizedEmail = sanitizeEmail(email);
+  
   // Sign up user
-  const result = await signUp({ email, password });
+  const result = await signUp({ email: sanitizedEmail, password });
   
   // Create an API key for the new user
   let apiKeyResult;
   try {
-    apiKeyResult = createNewApiKey(result.user.id, 'Default Key', false);
+    apiKeyResult = await createNewApiKey(result.user.id as string, 'Default Key', false);
   } catch (e) {
     // If key creation fails, still return success but without key
     console.error('Failed to create API key for new user:', e);
@@ -105,7 +116,7 @@ authRoutes.post('/signup', async (c) => {
  * POST /api/v1/auth/login
  * Authenticate user and get token
  */
-authRoutes.post('/login', async (c) => {
+authRoutes.post('/login', loginRateLimit, async (c) => {
   // Parse and validate request body
   let body: { email?: unknown; password?: unknown };
   try {
@@ -130,27 +141,42 @@ authRoutes.post('/login', async (c) => {
     throw new ValidationError('Password must be a string', { field: 'password' });
   }
   
+  // Sanitize input
+  const sanitizedEmail = sanitizeEmail(email);
+  
+  // Get client IP for rate limiting
+  const ip = c.get('authRateLimitIp') || 'unknown';
+  
   // Login user
-  const result = await login({ email, password });
-  
-  // Set auth cookie
-  const cookieOptions = getAuthCookieOptions();
-  c.header('Set-Cookie', 
-    `auth_token=${result.token}; ` +
-    `HttpOnly; ` +
-    `Path=${cookieOptions.path}; ` +
-    `Max-Age=${cookieOptions.maxAge}; ` +
-    `SameSite=${cookieOptions.sameSite}` +
-    (cookieOptions.secure ? '; Secure' : '')
-  );
-  
-  // Return user and token
-  return c.json({
-    success: true,
-    user: result.user,
-    token: result.token,
-    expiresAt: result.expiresAt
-  });
+  try {
+    const result = await login({ email: sanitizedEmail, password });
+    
+    // Clear rate limit on successful login
+    clearLoginRateLimit(ip);
+    
+    // Set auth cookie
+    const cookieOptions = getAuthCookieOptions();
+    c.header('Set-Cookie', 
+      `auth_token=${result.token}; ` +
+      `HttpOnly; ` +
+      `Path=${cookieOptions.path}; ` +
+      `Max-Age=${cookieOptions.maxAge}; ` +
+      `SameSite=${cookieOptions.sameSite}` +
+      (cookieOptions.secure ? '; Secure' : '')
+    );
+    
+    // Return user and token
+    return c.json({
+      success: true,
+      user: result.user,
+      token: result.token,
+      expiresAt: result.expiresAt
+    });
+  } catch (error) {
+    // Record failed login attempt
+    recordFailedLogin(ip);
+    throw error;
+  }
 });
 
 /**
@@ -204,7 +230,7 @@ authRoutes.get('/me', requireAuth, async (c) => {
  * POST /api/v1/auth/forgot-password
  * Request password reset
  */
-authRoutes.post('/forgot-password', async (c) => {
+authRoutes.post('/forgot-password', passwordResetRateLimit, async (c) => {
   // Parse and validate request body
   let body: { email?: unknown };
   try {
@@ -222,13 +248,16 @@ authRoutes.post('/forgot-password', async (c) => {
     throw new ValidationError('Email must be a string', { field: 'email' });
   }
   
-  const result = await initiatePasswordReset(email);
+  // Sanitize input
+  const sanitizedEmail = sanitizeEmail(email);
+  
+  const result = await initiatePasswordReset(sanitizedEmail);
   
   // Always return success to avoid revealing if email exists
   // In production, you would send the token via email
   if (result) {
     // Log for dev - in production this would send an email
-    console.log(`[DEV] Password reset token for ${email}: ${result.token}`);
+    console.log(`[DEV] Password reset token for ${sanitizedEmail}: ${result.token}`);
   }
   
   return c.json({

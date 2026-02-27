@@ -1,254 +1,296 @@
 /**
- * API Key Database Operations
- * SQLite implementation for API key management
+ * API Keys Database - HYPR Micro Implementation
+ * 
+ * Manages API key records in HYPR Micro with in-memory fallback.
+ * 
+ * @see HYPR-REFACTOR-PLAN.md Phase 3
  */
 
-import { getDb } from './index.js';
-import { ApiKey } from './schema.js';
-import { v4 as uuidv4 } from 'uuid';
+import { getMicroClient } from '../lib/hypr-micro.js';
+import { isHyprMode, DB_NAMES } from './index.js';
+import { logger } from '../utils/logger.js';
 
-export interface CreateApiKeyInput {
+export interface ApiKey {
+  id: string;
+  user_id: string;
+  key_hash: string;
+  prefix: string;
+  name: string;
+  is_active: boolean;
+  usage_count: number;
+  created_at: string;
+  last_used_at: string | null;
+  [key: string]: unknown; // Index signature for HYPR Micro compatibility
+}
+
+// In-memory fallback storage
+const memoryKeys = new Map<string, ApiKey>();
+const hashIndex = new Map<string, string>(); // key_hash -> id
+
+/**
+ * Create a new API key record
+ */
+export async function createApiKeyRecord(data: {
   userId: string;
   keyHash: string;
   prefix: string;
-  name?: string;
-}
-
-export interface ApiKeyWithUsage extends ApiKey {
-  last_used_at: string | null;
-  usage_count: number;
-}
-
-/**
- * Create a new API key
- */
-export function createApiKey(input: CreateApiKeyInput): ApiKey {
-  const db = getDb();
-  
+  name: string;
+}): Promise<ApiKey> {
+  const id = generateId();
   const now = new Date().toISOString();
-  const id = uuidv4();
   
-  const stmt = db.prepare(`
-    INSERT INTO api_keys (id, user_id, key_hash, prefix, name, usage_count, is_active, created_at)
-    VALUES (?, ?, ?, ?, ?, 0, 1, ?)
-  `);
-  
-  stmt.run(
+  const apiKey: ApiKey = {
     id,
-    input.userId,
-    input.keyHash,
-    input.prefix,
-    input.name || null,
-    now
-  );
-  
-  return {
-    id,
-    user_id: input.userId,
-    key_hash: input.keyHash,
-    prefix: input.prefix,
-    name: input.name || null,
-    usage_count: 0,
-    last_used_at: null,
+    user_id: data.userId,
+    key_hash: data.keyHash,
+    prefix: data.prefix,
+    name: data.name,
     is_active: true,
+    usage_count: 0,
     created_at: now,
+    last_used_at: null,
   };
-}
 
-/**
- * Find API key by ID
- */
-export function findApiKeyById(id: string): ApiKey | null {
-  const db = getDb();
-  
-  const stmt = db.prepare(`
-    SELECT id, user_id, key_hash, prefix, name, usage_count, last_used_at, is_active, created_at
-    FROM api_keys
-    WHERE id = ?
-  `);
-  
-  const row = stmt.get(id) as ApiKey | undefined;
-  return row || null;
-}
-
-/**
- * Find API key by key hash
- */
-export function findApiKeyByHash(keyHash: string): ApiKey | null {
-  const db = getDb();
-  
-  const stmt = db.prepare(`
-    SELECT id, user_id, key_hash, prefix, name, usage_count, last_used_at, is_active, created_at
-    FROM api_keys
-    WHERE key_hash = ?
-  `);
-  
-  const row = stmt.get(keyHash) as ApiKey | undefined;
-  return row || null;
-}
-
-/**
- * List API keys for a user
- * Returns keys without the full hash (masked)
- */
-export function listApiKeysByUser(userId: string): ApiKey[] {
-  const db = getDb();
-  
-  const stmt = db.prepare(`
-    SELECT id, user_id, key_hash, prefix, name, usage_count, last_used_at, is_active, created_at
-    FROM api_keys
-    WHERE user_id = ?
-    ORDER BY created_at DESC
-  `);
-  
-  return stmt.all(userId) as ApiKey[];
-}
-
-/**
- * Update API key
- */
-export function updateApiKey(id: string, updates: { name?: string; is_active?: boolean }): ApiKey | null {
-  const db = getDb();
-  
-  const key = findApiKeyById(id);
-  if (!key) return null;
-  
-  const fields: string[] = [];
-  const values: (string | number)[] = [];
-  
-  if (updates.name !== undefined) {
-    fields.push('name = ?');
-    values.push(updates.name);
+  if (isHyprMode()) {
+    try {
+      await getMicroClient().insert(DB_NAMES.API_KEYS, apiKey);
+      logger.debug('API key created in HYPR Micro', { id, prefix: apiKey.prefix });
+    } catch (error: unknown) {
+      logger.error('Failed to create API key in HYPR Micro', { error: { name: 'HyprMicroError', message: error instanceof Error ? error.message : String(error) } });
+      throw error;
+    }
+  } else {
+    memoryKeys.set(id, apiKey);
+    hashIndex.set(data.keyHash, id);
+    logger.debug('API key created in memory', { id, prefix: apiKey.prefix });
   }
-  if (updates.is_active !== undefined) {
-    fields.push('is_active = ?');
-    values.push(updates.is_active ? 1 : 0);
+
+  return apiKey;
+}
+
+/**
+ * Get API key by key hash
+ */
+export async function getApiKeyByKey(keyHash: string): Promise<ApiKey | null> {
+  if (isHyprMode()) {
+    try {
+      const keys = await getMicroClient().query<ApiKey>(DB_NAMES.API_KEYS, { key_hash: keyHash });
+      return keys[0] || null;
+    } catch (error: unknown) {
+      logger.error('Failed to get API key from HYPR Micro', { error: { name: 'HyprMicroError', message: error instanceof Error ? error.message : String(error) } });
+      return null;
+    }
   }
   
-  if (fields.length === 0) return key;
-  
-  values.push(id);
-  
-  const stmt = db.prepare<unknown[], { changes: number }>(`
-    UPDATE api_keys
-    SET ${fields.join(', ')}
-    WHERE id = ?
-  `);
-  
-  stmt.run(...values);
-  
-  return findApiKeyById(id);
+  const id = hashIndex.get(keyHash);
+  if (!id) return null;
+  return memoryKeys.get(id) || null;
 }
+
+// Alias for compatibility
+export const findApiKeyByHash = getApiKeyByKey;
+
+/**
+ * Get API keys by user ID
+ */
+export async function getApiKeysByUserId(userId: string): Promise<ApiKey[]> {
+  if (isHyprMode()) {
+    try {
+      const keys = await getMicroClient().query<ApiKey>(DB_NAMES.API_KEYS, { user_id: userId });
+      return keys.sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+    } catch (error: unknown) {
+      logger.error('Failed to get API keys from HYPR Micro', { userId, error: { name: 'HyprMicroError', message: error instanceof Error ? error.message : String(error) } });
+      return [];
+    }
+  }
+  
+  return Array.from(memoryKeys.values())
+    .filter(k => k.user_id === userId)
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+}
+
+// Alias for compatibility
+export const listApiKeysByUser = getApiKeysByUserId;
 
 /**
  * Revoke (deactivate) an API key
  */
-export function revokeApiKey(id: string, userId: string): boolean {
-  const db = getDb();
+export async function revokeApiKey(id: string): Promise<boolean> {
+  if (isHyprMode()) {
+    try {
+      const result = await getMicroClient().update(DB_NAMES.API_KEYS, id, { is_active: false });
+      return result !== null;
+    } catch (error: unknown) {
+      logger.error('Failed to revoke API key in HYPR Micro', { id, error: { name: 'HyprMicroError', message: error instanceof Error ? error.message : String(error) } });
+      return false;
+    }
+  }
   
-  const stmt = db.prepare(`
-    UPDATE api_keys
-    SET is_active = 0
-    WHERE id = ? AND user_id = ?
-  `);
+  const key = memoryKeys.get(id);
+  if (!key) return false;
   
-  const result = stmt.run(id, userId);
-  return result.changes > 0;
+  key.is_active = false;
+  memoryKeys.set(id, key);
+  
+  return true;
+}
+
+/**
+ * Increment key usage count
+ */
+export async function incrementKeyUsage(id: string): Promise<void> {
+  if (isHyprMode()) {
+    try {
+      const key = await getMicroClient().get<ApiKey>(DB_NAMES.API_KEYS, id);
+      if (key) {
+        await getMicroClient().update(DB_NAMES.API_KEYS, id, {
+          usage_count: (key.usage_count || 0) + 1,
+          last_used_at: new Date().toISOString(),
+        });
+      }
+    } catch (error: unknown) {
+      logger.error('Failed to increment key usage in HYPR Micro', { id, error: { name: 'HyprMicroError', message: error instanceof Error ? error.message : String(error) } });
+    }
+    return;
+  }
+  
+  const key = memoryKeys.get(id);
+  if (key) {
+    key.usage_count = (key.usage_count || 0) + 1;
+    key.last_used_at = new Date().toISOString();
+    memoryKeys.set(id, key);
+  }
+}
+
+/**
+ * Get all API keys (admin only)
+ */
+export async function getAllApiKeys(): Promise<ApiKey[]> {
+  if (isHyprMode()) {
+    try {
+      const { docs } = await getMicroClient().list<ApiKey>(DB_NAMES.API_KEYS);
+      return docs;
+    } catch (error: unknown) {
+      logger.error('Failed to get all API keys from HYPR Micro', { error: { name: 'HyprMicroError', message: error instanceof Error ? error.message : String(error) } });
+      return [];
+    }
+  }
+  
+  return Array.from(memoryKeys.values());
 }
 
 /**
  * Delete an API key permanently
  */
-export function deleteApiKey(id: string, userId: string): boolean {
-  const db = getDb();
+export async function deleteApiKey(id: string): Promise<boolean> {
+  if (isHyprMode()) {
+    try {
+      return await getMicroClient().delete(DB_NAMES.API_KEYS, id);
+    } catch (error: unknown) {
+      logger.error('Failed to delete API key from HYPR Micro', { id, error: { name: 'HyprMicroError', message: error instanceof Error ? error.message : String(error) } });
+      return false;
+    }
+  }
   
-  const stmt = db.prepare(`
-    DELETE FROM api_keys
-    WHERE id = ? AND user_id = ?
-  `);
-  
-  const result = stmt.run(id, userId);
-  return result.changes > 0;
+  const key = memoryKeys.get(id);
+  if (key) {
+    hashIndex.delete(key.key_hash);
+  }
+  return memoryKeys.delete(id);
 }
 
 /**
- * Increment usage count for an API key
- * Also updates last_used_at
+ * Update an API key (e.g., change name)
  */
-export function incrementKeyUsage(keyId: string): void {
-  const db = getDb();
+export async function updateApiKey(id: string, updates: { name?: string }): Promise<ApiKey | null> {
+  if (isHyprMode()) {
+    try {
+      const result = await getMicroClient().update<ApiKey>(DB_NAMES.API_KEYS, id, updates);
+      return result;
+    } catch (error: unknown) {
+      logger.error('Failed to update API key in HYPR Micro', { id, error: { name: 'HyprMicroError', message: error instanceof Error ? error.message : String(error) } });
+      return null;
+    }
+  }
   
-  const now = new Date().toISOString();
+  const key = memoryKeys.get(id);
+  if (!key) return null;
   
-  const stmt = db.prepare(`
-    UPDATE api_keys
-    SET usage_count = usage_count + 1, last_used_at = ?
-    WHERE id = ?
-  `);
+  if (updates.name !== undefined) {
+    key.name = updates.name;
+  }
   
-  stmt.run(now, keyId);
-}
-
-/**
- * Get usage stats for a user's API keys
- */
-export function getApiKeyUsageStats(userId: string): {
-  totalKeys: number;
-  activeKeys: number;
-  totalUsage: number;
-} {
-  const db = getDb();
-  
-  const stmt = db.prepare(`
-    SELECT 
-      COUNT(*) as totalKeys,
-      SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as activeKeys,
-      COALESCE(SUM(usage_count), 0) as totalUsage
-    FROM api_keys
-    WHERE user_id = ?
-  `);
-  
-  const result = stmt.get(userId) as { totalKeys: number; activeKeys: number; totalUsage: number };
-  
-  return {
-    totalKeys: result.totalKeys || 0,
-    activeKeys: result.activeKeys || 0,
-    totalUsage: result.totalUsage || 0,
-  };
+  memoryKeys.set(id, key);
+  return key;
 }
 
 /**
  * Count API keys for a user
  */
-export function countApiKeysByUser(userId: string): number {
-  const db = getDb();
+export async function countApiKeysByUser(userId: string): Promise<number> {
+  if (isHyprMode()) {
+    try {
+      const keys = await getMicroClient().query<ApiKey>(DB_NAMES.API_KEYS, { user_id: userId });
+      return keys.length;
+    } catch (error: unknown) {
+      logger.error('Failed to count API keys in HYPR Micro', { userId, error: { name: 'HyprMicroError', message: error instanceof Error ? error.message : String(error) } });
+      return 0;
+    }
+  }
   
-  const stmt = db.prepare(`
-    SELECT COUNT(*) as count
-    FROM api_keys
-    WHERE user_id = ?
-  `);
-  
-  const result = stmt.get(userId) as { count: number };
-  return result.count;
+  return Array.from(memoryKeys.values()).filter(k => k.user_id === userId).length;
 }
 
 /**
- * Clear all API keys for a user (for testing)
+ * Get API key by ID (async version)
  */
-export function clearApiKeysByUser(userId: string): void {
-  const db = getDb();
+export async function findApiKeyByIdAsync(id: string): Promise<ApiKey | null> {
+  if (isHyprMode()) {
+    try {
+      return await getMicroClient().get<ApiKey>(DB_NAMES.API_KEYS, id);
+    } catch (error: unknown) {
+      logger.error('Failed to get API key by ID from HYPR Micro', { id, error: { name: 'HyprMicroError', message: error instanceof Error ? error.message : String(error) } });
+      return null;
+    }
+  }
   
-  const stmt = db.prepare('DELETE FROM api_keys WHERE user_id = ?');
-  stmt.run(userId);
+  return memoryKeys.get(id) || null;
+}
+
+// Type alias for create input
+export type CreateApiKeyInput = {
+  userId: string;
+  keyHash: string;
+  prefix: string;
+  name: string;
+};
+
+/**
+ * Generate unique ID
+ */
+function generateId(): string {
+  const timestamp = Date.now().toString(36);
+  const random = Math.random().toString(36).substring(2, 9);
+  return `key_${timestamp}_${random}`;
+}
+
+// Legacy sync function for backward compatibility
+export function findApiKeyById(id: string): ApiKey | null {
+  // Sync wrapper - returns null in HYPR mode since we can't do async
+  if (isHyprMode()) {
+    return null;
+  }
+  return memoryKeys.get(id) || null;
 }
 
 /**
- * Clear all API keys (for testing)
+ * Reset in-memory storage (for testing only)
  */
-export function clearAllApiKeys(): void {
-  const db = getDb();
-  
-  const stmt = db.prepare('DELETE FROM api_keys');
-  stmt.run();
+export function _resetKeys(): void {
+  if (!isHyprMode()) {
+    memoryKeys.clear();
+    hashIndex.clear();
+  }
 }

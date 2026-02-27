@@ -2,11 +2,17 @@
  * Development Seed Data
  * 
  * Creates test users and API keys for development/testing.
- * Only runs in development environment or when explicitly triggered.
+ * Works with both HYPR Micro (production) and in-memory storage (development).
+ * Only runs when explicitly triggered.
  */
 
 import { randomBytes, createHash } from 'crypto';
-import { getDb } from './index.js';
+import bcrypt from 'bcrypt';
+import { isHyprMode, DB_NAMES } from './index.js';
+import { createUser, findUserByEmail, getAllUsers, User } from './users.js';
+import { createApiKeyRecord, getApiKeysByUserId, ApiKey } from './keys.js';
+import { getMicroClient } from '../lib/hypr-micro.js';
+import { logger } from '../utils/logger.js';
 
 interface SeedResult {
   user: {
@@ -23,6 +29,10 @@ interface SeedResult {
     prefix: string;
   };
 }
+
+// In-memory storage for seed data (development mode)
+const memoryUsers = new Map<string, any>();
+const memoryApiKeys = new Map<string, any>();
 
 /**
  * Generate a unique ID
@@ -52,56 +62,72 @@ function generateApiKey(): { key: string; prefix: string } {
 }
 
 /**
+ * Hash password with bcrypt
+ */
+async function hashPassword(password: string): Promise<string> {
+  return bcrypt.hash(password, 12);
+}
+
+/**
  * Seed development data
  * Creates a test user, admin user, and API keys
  */
-export function seedDatabase(): SeedResult {
-  const db = getDb();
-  
+export async function seedDatabase(): Promise<SeedResult> {
   const testEmail = 'test@agent-talk.dev';
   const adminEmail = 'admin@agent-talk.dev';
+  const testPassword = 'test_password_123';
+  const adminPassword = 'admin_password_123';
   
-  let adminUserId: string | undefined;
-  
-  // Create admin user first
-  const existingAdmin = db
-    .prepare('SELECT id, email FROM users WHERE email = ?')
-    .get(adminEmail) as { id: string; email: string } | undefined;
+  let adminUser: { id: string; email: string } | undefined;
+  let testUser: User;
+  let apiKey: ApiKey;
+  let testKey: string;
+  let testPrefix: string;
+
+  // Check for existing admin user
+  const existingAdmin = await findUserByEmail(adminEmail);
   
   if (!existingAdmin) {
-    adminUserId = generateId('admin');
-    db.prepare(`
-      INSERT INTO users (id, email, password_hash, tier, role)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(adminUserId, adminEmail, hashApiKey('admin_password_123'), 'enterprise', 'admin');
-    console.log('  ✓ Created admin user');
+    // Create admin user
+    const hashedAdminPassword = await hashPassword(adminPassword);
+    adminUser = await createUser({ 
+      email: adminEmail, 
+      passwordHash: hashedAdminPassword,
+      tier: 'enterprise'
+    });
+    
+    // Update role to admin
+    if (isHyprMode()) {
+      await getMicroClient().update(DB_NAMES.USERS, adminUser.id, { role: 'admin' });
+    }
+    
+    logger.info('Created admin user', { email: adminEmail });
   } else {
-    adminUserId = existingAdmin.id;
-    // Ensure admin role is set
-    db.prepare('UPDATE users SET role = ? WHERE id = ?').run('admin', existingAdmin.id);
-    console.log('  ✓ Admin user already exists');
+    adminUser = { id: existingAdmin.id, email: existingAdmin.email };
+    // Ensure admin role
+    if (isHyprMode()) {
+      await getMicroClient().update(DB_NAMES.USERS, existingAdmin.id, { role: 'admin' });
+    }
+    logger.info('Admin user already exists');
   }
-  
-  // Check if test user already exists
-  const existingUser = db
-    .prepare('SELECT id, email FROM users WHERE email = ?')
-    .get(testEmail) as { id: string; email: string } | undefined;
+
+  // Check for existing test user
+  const existingUser = await findUserByEmail(testEmail);
   
   if (existingUser) {
     // Check if they have an API key
-    const existingKey = db
-      .prepare('SELECT id, prefix FROM api_keys WHERE user_id = ? AND is_active = 1')
-      .get(existingUser.id) as { id: string; prefix: string } | undefined;
+    const existingKeys = await getApiKeysByUserId(existingUser.id);
     
-    if (existingKey) {
-      console.log('  ⚠️  Test user already exists with API key');
-      console.log(`  User ID: ${existingUser.id}`);
-      console.log(`  Email: ${existingUser.email}`);
-      console.log(`  API Key Prefix: ${existingKey.prefix}`);
+    if (existingKeys.length > 0) {
+      const existingKey = existingKeys[0];
+      logger.info('Test user already exists with API key', { 
+        userId: existingUser.id, 
+        prefix: existingKey.prefix 
+      });
       
       return {
-        user: existingUser,
-        adminUser: adminUserId ? { id: adminUserId, email: adminEmail } : undefined,
+        user: { id: existingUser.id, email: existingUser.email },
+        adminUser,
         apiKey: {
           id: existingKey.id,
           key: '(already exists - check db)',
@@ -111,74 +137,84 @@ export function seedDatabase(): SeedResult {
     }
     
     // User exists but no key - create one
-    const { key, prefix } = generateApiKey();
-    const keyId = generateId('key');
+    const keyResult = generateApiKey();
+    testKey = keyResult.key;
+    testPrefix = keyResult.prefix;
     
-    db.prepare(`
-      INSERT INTO api_keys (id, user_id, key_hash, prefix, name)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(keyId, existingUser.id, hashApiKey(key), prefix, 'Test Key');
+    apiKey = await createApiKeyRecord({
+      userId: existingUser.id,
+      keyHash: hashApiKey(testKey),
+      prefix: testPrefix,
+      name: 'Test Key'
+    });
     
-    console.log('  ✓ Created new API key for existing test user');
-    console.log(`  API Key: ${key}`);
+    logger.info('Created new API key for existing test user');
     
     return {
-      user: existingUser,
-      apiKey: { id: keyId, key, prefix }
+      user: { id: existingUser.id, email: existingUser.email },
+      adminUser,
+      apiKey: { id: apiKey.id, key: testKey, prefix: testPrefix }
     };
   }
   
   // Create new test user
-  const userId = generateId('user');
-  const { key, prefix } = generateApiKey();
-  const keyId = generateId('key');
-  
-  // Use transaction for atomic insert
-  const createTestUser = db.transaction(() => {
-    // Insert user
-    db.prepare(`
-      INSERT INTO users (id, email, password_hash, tier)
-      VALUES (?, ?, ?, ?)
-    `).run(userId, testEmail, hashApiKey('test_password_123'), 'hobby');
-    
-    // Insert API key
-    db.prepare(`
-      INSERT INTO api_keys (id, user_id, key_hash, prefix, name)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(keyId, userId, hashApiKey(key), prefix, 'Test Key');
+  const hashedPassword = await hashPassword(testPassword);
+  testUser = await createUser({ 
+    email: testEmail, 
+    passwordHash: hashedPassword,
+    tier: 'hobby'
   });
   
-  createTestUser();
+  // Generate API key
+  const keyResult = generateApiKey();
+  testKey = keyResult.key;
+  testPrefix = keyResult.prefix;
   
+  apiKey = await createApiKeyRecord({
+    userId: testUser.id,
+    keyHash: hashApiKey(testKey),
+    prefix: testPrefix,
+    name: 'Test Key'
+  });
+  
+  // Print seed data
   console.log('');
   console.log('  ╔══════════════════════════════════════════════════════════╗');
   console.log('  ║           🔑 DEVELOPMENT SEED DATA CREATED               ║');
   console.log('  ╠══════════════════════════════════════════════════════════╣');
   console.log('  ║                                                          ║');
-  console.log(`  ║  User ID:    ${userId.padEnd(43)}║`);
+  console.log(`  ║  User ID:    ${testUser.id.padEnd(43)}║`);
   console.log(`  ║  Email:      ${testEmail.padEnd(43)}║`);
+  console.log(`  ║  Password:   ${testPassword.padEnd(43)}║`);
   console.log('  ║                                                          ║');
   console.log('  ║  API Key (save this!):                                   ║');
-  console.log(`  ║  ${key.padEnd(57)}║`);
+  console.log(`  ║  ${testKey.padEnd(57)}║`);
+  console.log('  ║                                                          ║');
+  console.log('  ║  Mode: ' + (isHyprMode() ? 'HYPR Micro (production)'.padEnd(48) : 'In-Memory (development)'.padEnd(48)) + '║');
   console.log('  ║                                                          ║');
   console.log('  ╚══════════════════════════════════════════════════════════╝');
   console.log('');
   
   return {
-    user: { id: userId, email: testEmail },
-    apiKey: { id: keyId, key, prefix }
+    user: { id: testUser.id, email: testEmail },
+    adminUser,
+    apiKey: { id: apiKey.id, key: testKey, prefix: testPrefix }
   };
 }
 
 /**
  * Clear all seed data (for testing)
  */
-export function clearSeedData(): void {
-  const db = getDb();
+export async function clearSeedData(): Promise<void> {
   const testEmail = 'test@agent-talk.dev';
   
-  db.prepare('DELETE FROM api_keys WHERE user_id IN (SELECT id FROM users WHERE email = ?)').run(testEmail);
-  db.prepare('DELETE FROM users WHERE email = ?').run(testEmail);
-  
-  console.log('  ✓ Cleared seed data');
+  // Find and delete test user
+  const testUser = await findUserByEmail(testEmail);
+  if (testUser) {
+    if (isHyprMode()) {
+      await getMicroClient().delete(DB_NAMES.API_KEYS, testUser.id);
+      await getMicroClient().delete(DB_NAMES.USERS, testUser.id);
+    }
+    logger.info('Cleared seed data');
+  }
 }

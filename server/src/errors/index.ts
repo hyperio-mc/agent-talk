@@ -39,6 +39,7 @@ export enum ErrorCode {
   RATE_LIMIT_EXCEEDED = 'RATE_LIMIT_EXCEEDED',
   DAILY_LIMIT_EXCEEDED = 'DAILY_LIMIT_EXCEEDED',
   MONTHLY_LIMIT_EXCEEDED = 'MONTHLY_LIMIT_EXCEEDED',
+  TOO_MANY_REQUESTS = 'TOO_MANY_REQUESTS',
   
   // Server errors (500)
   INTERNAL_ERROR = 'INTERNAL_ERROR',
@@ -139,9 +140,9 @@ export class InvalidInputError extends ValidationError {
  * Missing Field Error (400)
  * Used when required fields are missing
  */
-export class MissingFieldError extends ValidationError {
+export class MissingFieldError extends AppError {
   constructor(field: string) {
-    super(`Missing required field: ${field}`, { field });
+    super(ErrorCode.MISSING_FIELD, `Missing required field: ${field}`, 400, { field });
   }
 }
 
@@ -149,16 +150,21 @@ export class MissingFieldError extends ValidationError {
  * Invalid Voice Error (400)
  * Used when voice ID is not recognized
  */
-export class InvalidVoiceError extends ValidationError {
+export class InvalidVoiceError extends AppError {
   constructor(
     requestedVoice: string,
     availableVoices: string[]
   ) {
-    super(`Invalid voice: "${requestedVoice}"`, {
-      field: 'voice',
-      requestedVoice,
-      availableVoices: availableVoices.slice(0, 20) // Limit for response size
-    });
+    super(
+      ErrorCode.INVALID_VOICE,
+      `Invalid voice: "${requestedVoice}"`,
+      400,
+      {
+        field: 'voice',
+        requestedVoice,
+        availableVoices: availableVoices.slice(0, 20) // Limit for response size
+      }
+    );
   }
 }
 
@@ -189,19 +195,19 @@ export class UnauthorizedError extends AuthError {
 /**
  * Missing API Key Error (401)
  */
-export class MissingApiKeyError extends UnauthorizedError {
+export class MissingApiKeyError extends AuthError {
   constructor() {
-    super('API key is required');
+    super(ErrorCode.MISSING_API_KEY, 'API key is required', 401);
   }
 }
 
 /**
  * Invalid API Key Error (401)
  */
-export class InvalidApiKeyError extends UnauthorizedError {
+export class InvalidApiKeyError extends AuthError {
   constructor() {
     // Don't reveal specifics about why the key is invalid
-    super('Invalid API key');
+    super(ErrorCode.INVALID_API_KEY, 'Invalid API key', 401);
   }
 }
 
@@ -310,6 +316,19 @@ export class MonthlyLimitExceededError extends RateLimitError {
       'Monthly rate limit exceeded',
       { limit, used, resetAt: resetAt.toISOString() }
     );
+  }
+}
+
+/**
+ * Too Many Requests Error (429)
+ * Generic rate limit error for auth endpoints
+ */
+export class TooManyRequestsError extends AppError {
+  constructor(
+    message: string = 'Too many requests',
+    details?: Record<string, unknown>
+  ) {
+    super(ErrorCode.TOO_MANY_REQUESTS, message, 429, details);
   }
 }
 

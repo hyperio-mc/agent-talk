@@ -1,125 +1,186 @@
 /**
- * Agent Talk Database Connection
+ * Database Module (HYPR Micro)
  * 
- * SQLite database with connection pooling via better-sqlite3.
- * Uses WAL mode for better concurrent read performance.
+ * Database operations are now handled by HYPR Micro.
+ * The module provides a unified interface for both HYPR Micro (production)
+ * and in-memory storage (development/fallback).
+ * 
+ * Set environment variable:
+ * - HYPR_MODE=production to use HYPR Micro
+ * - HYPR_MODE=development or unset for in-memory storage
+ * 
+ * @see HYPR-REFACTOR-PLAN.md Phase 3
  */
 
-import Database from 'better-sqlite3';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
-import { mkdirSync, existsSync } from 'fs';
-import { migrations } from './schema.js';
+import { getMicroClient, HyprMicroClient } from '../lib/hypr-micro.js';
+import { logger } from '../utils/logger.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+// Database names in HYPR Micro
+export const DB_NAMES = {
+  USERS: 'users',
+  API_KEYS: 'api_keys',
+  MEMOS: 'memos',
+  USAGE_LOGS: 'usage_logs',
+  SUBSCRIPTIONS: 'subscriptions',
+} as const;
 
-// Database configuration
-const DB_PATH = process.env.DATABASE_PATH || join(__dirname, '../../../data/agent-talk.db');
-
-let db: Database.Database | null = null;
+// Initialize flag
+let isInitialized = false;
+let hyprMode = false;
 
 /**
- * Get or create database connection
- * Singleton pattern - reuses the same connection
+ * Check if we're running in HYPR mode
  */
-export function getDb(): Database.Database {
-  if (!db) {
-    // Ensure data directory exists
-    const dataDir = dirname(DB_PATH);
-    if (!existsSync(dataDir)) {
-      mkdirSync(dataDir, { recursive: true });
-    }
-
-    db = new Database(DB_PATH);
-    
-    // Enable WAL mode for better concurrent performance
-    db.pragma('journal_mode = WAL');
-    
-    // Enable foreign keys
-    db.pragma('foreign_keys = ON');
-    
-    console.log(`📦 Database connected: ${DB_PATH}`);
-  }
-
-  return db;
+export function isHyprMode(): boolean {
+  return hyprMode;
 }
 
 /**
- * Close database connection
- * Call on server shutdown
+ * Initialize databases
+ * In HYPR mode, creates tables in HYPR Micro
+ * In development mode, uses in-memory storage
+ */
+export async function initDatabases(): Promise<void> {
+  if (isInitialized) {
+    return;
+  }
+
+  hyprMode = process.env.HYPR_MODE === 'production' || 
+             process.env.NODE_ENV === 'production';
+
+  if (hyprMode) {
+    logger.info('Initializing HYPR Micro databases...');
+    
+    try {
+      const client = getMicroClient();
+      
+      // Create databases if they don't exist
+      for (const db of Object.values(DB_NAMES)) {
+        try {
+          await client.createDatabase(db);
+          logger.debug('Database created/verified', { db });
+        } catch (error) {
+          // Database might already exist, that's fine
+          logger.debug('Database already exists or error', { db, error: { name: 'InitError', message: String(error) } });
+        }
+      }
+      
+      logger.info('HYPR Micro databases initialized');
+    } catch (error) {
+      logger.error('Failed to initialize HYPR Micro, falling back to memory', { error: { name: 'InitError', message: String(error) } });
+      hyprMode = false;
+    }
+  } else {
+    logger.info('Using in-memory database (development mode)');
+  }
+
+  isInitialized = true;
+}
+
+/**
+ * Get the HYPR Micro client (throws if not in HYPR mode)
+ */
+export function getMicro(): HyprMicroClient {
+  if (!hyprMode) {
+    throw new Error('Not in HYPR mode. Use HYPR_MODE=production to enable HYPR Micro.');
+  }
+  return getMicroClient();
+}
+
+/**
+ * Legacy compatibility: getDb returns null (no SQLite connection)
+ * @deprecated Use HYPR Micro operations directly
+ */
+export function getDb(): unknown {
+  return null;
+}
+
+/**
+ * Legacy compatibility: closeDb is a no-op
  */
 export function closeDb(): void {
-  if (db) {
-    db.close();
-    db = null;
-    console.log('📦 Database connection closed');
-  }
+  // No-op - HYPR Micro doesn't need cleanup
 }
 
 /**
- * Run pending migrations
- * Idempotent - tracks applied migrations in database
+ * Legacy compatibility: runMigrations handles database setup
  */
-export function runMigrations(): void {
-  const database = getDb();
-  
-  // Ensure migrations table exists
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS migrations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      applied_at TEXT DEFAULT (datetime('now'))
-    )
-  `);
-  
-  // Get applied migrations
-  const applied = database
-    .prepare('SELECT name FROM migrations')
-    .all() as { name: string }[];
-  
-  const appliedNames = new Set(applied.map(m => m.name));
-  
-  // Run pending migrations
-  for (const migration of migrations) {
-    if (appliedNames.has(migration.name)) {
-      console.log(`  ✓ Migration already applied: ${migration.name}`);
-      continue;
+export async function runMigrations(): Promise<void> {
+  await initDatabases();
+}
+
+/**
+ * Health check for database connection
+ */
+export async function checkHealth(): Promise<{ status: string; message: string; mode: string }> {
+  if (hyprMode) {
+    try {
+      const client = getMicroClient();
+      const dbs = await client.listDatabases();
+      return {
+        status: 'ok',
+        message: `HYPR Micro connected (${dbs.length} databases)`,
+        mode: 'hypr',
+      };
+    } catch (error) {
+      return {
+        status: 'error',
+        message: `HYPR Micro error: ${error}`,
+        mode: 'hypr',
+      };
     }
-    
-    // Run migration in a transaction
-    const runMigration = database.transaction(() => {
-      database.exec(migration.sql);
-      database.prepare('INSERT INTO migrations (name) VALUES (?)').run(migration.name);
-    });
-    
-    runMigration();
-    console.log(`  ✓ Migration applied: ${migration.name}`);
-  }
-}
-
-/**
- * Check database health
- */
-export function checkHealth(): { status: string; path: string; tables: number } {
-  try {
-    const database = getDb();
-    const tables = database
-      .prepare("SELECT count(*) as count FROM sqlite_master WHERE type='table'")
-      .get() as { count: number };
-    
+  } else {
     return {
       status: 'ok',
-      path: DB_PATH,
-      tables: tables.count
-    };
-  } catch (error) {
-    return {
-      status: 'error',
-      path: DB_PATH,
-      tables: 0
+      message: 'Using in-memory storage',
+      mode: 'memory',
     };
   }
 }
 
-// Re-export types and schema
-export * from './schema.js';
+// Re-export model functions
+export { 
+  findUserById, 
+  findUserByEmail, 
+  createUser, 
+  updateUser,
+  getAllUsers,
+  updateUserTier
+} from './users.js';
+
+export {
+  createMemo,
+  getMemosByUserId,
+  getMemoById,
+  deleteMemo,
+  getAllMemos,
+  countMemosByUserId
+} from './memos.js';
+
+export {
+  createApiKeyRecord,
+  getApiKeyByKey,
+  getApiKeysByUserId,
+  revokeApiKey,
+  incrementKeyUsage,
+  getAllApiKeys,
+  deleteApiKey
+} from './keys.js';
+
+export {
+  createSubscription,
+  getSubscriptionByUserId,
+  updateSubscription,
+  cancelSubscription,
+  getAllSubscriptions
+} from './subscriptions.js';
+
+export default {
+  initDatabases,
+  isHyprMode,
+  getMicro,
+  getDb,
+  closeDb,
+  runMigrations,
+  checkHealth,
+};

@@ -2,7 +2,7 @@
  * Billing Routes for Agent Talk API
  * 
  * Handles tier upgrades, subscription management, and billing info.
- * Stripe integration is planned for future implementation.
+ * Stripe integration for Pro tier upgrades.
  */
 
 import { Hono } from 'hono';
@@ -21,6 +21,15 @@ import {
   UnauthorizedError,
   NotImplementedError,
 } from '../errors/index.js';
+import {
+  isStripeConfigured,
+  createCheckoutSession,
+  createPortalSession,
+  getSubscriptionDetails,
+  cancelSubscription,
+  reactivateSubscription,
+} from '../services/stripe.js';
+import { logger } from '../utils/logger.js';
 
 export const billingRoutes = new Hono();
 
@@ -100,14 +109,13 @@ billingRoutes.get('/tiers/:tier', async (c) => {
  * Get current user's subscription status
  * Requires authentication
  */
-billingRoutes.get('/subscription', requireAuth, loadTierInfo, async (c) => {
+billingRoutes.get('/subscription', requireAuth, async (c) => {
   const authUser = getAuthUser(c);
   
   if (!authUser) {
     throw new UnauthorizedError('Not authenticated');
   }
   
-  const tierInfo = getTierInfo(c);
   const user = await findUserById(authUser.userId);
   
   if (!user) {
@@ -117,6 +125,9 @@ billingRoutes.get('/subscription', requireAuth, loadTierInfo, async (c) => {
   const currentTier = user.tier as TierName;
   const tierConfig = getTierConfig(currentTier);
   
+  // Get subscription details from Stripe if available
+  const subscriptionDetails = await getSubscriptionDetails(authUser.userId);
+  
   return c.json({
     success: true,
     subscription: {
@@ -125,29 +136,256 @@ billingRoutes.get('/subscription', requireAuth, loadTierInfo, async (c) => {
       price: tierConfig.price,
       limits: tierConfig.limits,
       features: tierConfig.features,
-      // Placeholder fields for Stripe integration
-      stripeCustomerId: null,
-      stripeSubscriptionId: null,
-      currentPeriodStart: null,
-      currentPeriodEnd: null,
-      cancelAtPeriodEnd: false,
+      stripeCustomerId: subscriptionDetails?.stripeCustomerId || null,
+      stripeSubscriptionId: subscriptionDetails?.stripeSubscriptionId || null,
+      currentPeriodStart: null, // We can add this if needed
+      currentPeriodEnd: subscriptionDetails?.currentPeriodEnd || null,
+      cancelAtPeriodEnd: subscriptionDetails?.cancelAtPeriodEnd || false,
+      status: subscriptionDetails?.status || 'active',
     },
     user: {
       id: user.id,
       email: user.email,
       createdAt: user.createdAt,
     },
+    billing: {
+      stripeEnabled: isStripeConfigured(),
+      canUpgrade: currentTier === 'hobby',
+      canManageSubscription: subscriptionDetails?.hasSubscription || false,
+    },
   });
 });
 
 /**
- * POST /api/v1/billing/upgrade
- * Upgrade to a higher tier
+ * POST /api/v1/billing/checkout
+ * Create a Stripe checkout session for Pro tier upgrade
  * Requires authentication
- * 
- * TODO: Implement Stripe checkout session creation
  */
-billingRoutes.post('/upgrade', requireAuth, loadTierInfo, async (c) => {
+billingRoutes.post('/checkout', requireAuth, async (c) => {
+  const authUser = getAuthUser(c);
+  
+  if (!authUser) {
+    throw new UnauthorizedError('Not authenticated');
+  }
+  
+  // Check if Stripe is configured
+  if (!isStripeConfigured()) {
+    throw new ValidationError('Stripe is not configured. Please contact support.', {
+      stripeEnabled: false,
+    });
+  }
+  
+  // Get current user
+  const user = await findUserById(authUser.userId);
+  if (!user) {
+    throw new UnauthorizedError('User not found');
+  }
+  
+  const currentTier = user.tier as TierName;
+  
+  // Check if already on Pro tier
+  if (currentTier === 'pro') {
+    throw new ValidationError('You are already on the Pro tier', {
+      currentTier,
+    });
+  }
+  
+  // Check if on Enterprise (can't use checkout for upgrades)
+  if (currentTier === 'enterprise') {
+    throw new ValidationError('Enterprise tier cannot be managed via self-service', {
+      currentTier,
+      message: 'Please contact support for plan changes.',
+    });
+  }
+  
+  // Parse request body for optional success/cancel URLs
+  let body: { successUrl?: string; cancelUrl?: string } = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    // Use defaults
+  }
+  
+  // Default URLs
+  const baseUrl = process.env.BASE_URL || 'http://localhost:3001';
+  const successUrl = body.successUrl || `${baseUrl}/dashboard?billing=success`;
+  const cancelUrl = body.cancelUrl || `${baseUrl}/dashboard?billing=canceled`;
+  
+  try {
+    const { url, sessionId } = await createCheckoutSession(
+      authUser.userId,
+      user.email,
+      successUrl,
+      cancelUrl
+    );
+    
+    logger.info('Created checkout session', { 
+      userId: authUser.userId,
+      sessionId,
+      tier: 'pro' 
+    });
+    
+    return c.json({
+      success: true,
+      checkoutUrl: url,
+      sessionId,
+    });
+  } catch (error) {
+    logger.logError('Failed to create checkout session', error, { 
+      userId: authUser.userId
+    });
+    throw new ValidationError('Failed to create checkout session', {
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * POST /api/v1/billing/portal
+ * Create a Stripe customer portal session for subscription management
+ * Requires authentication
+ */
+billingRoutes.post('/portal', requireAuth, async (c) => {
+  const authUser = getAuthUser(c);
+  
+  if (!authUser) {
+    throw new UnauthorizedError('Not authenticated');
+  }
+  
+  // Check if Stripe is configured
+  if (!isStripeConfigured()) {
+    throw new ValidationError('Stripe is not configured', {
+      stripeEnabled: false,
+    });
+  }
+  
+  // Parse request body for optional return URL
+  let body: { returnUrl?: string } = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    // Use default
+  }
+  
+  const baseUrl = process.env.BASE_URL || 'http://localhost:3001';
+  const returnUrl = body.returnUrl || `${baseUrl}/dashboard`;
+  
+  try {
+    const portalUrl = await createPortalSession(authUser.userId, returnUrl);
+    
+    return c.json({
+      success: true,
+      portalUrl,
+    });
+  } catch (error) {
+    logger.error('Failed to create portal session', { 
+      userId: authUser.userId,
+      error: { name: error instanceof Error ? error.constructor.name : 'Error', message: error instanceof Error ? error.message : 'Unknown error' } 
+    });
+    
+    // User might not have a subscription yet
+    const message = error instanceof Error && error.message.includes('No Stripe customer')
+      ? 'No subscription found. Please upgrade first.'
+      : 'Failed to open billing portal';
+    
+    throw new ValidationError(message, {
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * POST /api/v1/billing/cancel
+ * Cancel subscription (downgrade to hobby at end of period)
+ * Requires authentication
+ */
+billingRoutes.post('/cancel', requireAuth, async (c) => {
+  const authUser = getAuthUser(c);
+  
+  if (!authUser) {
+    throw new UnauthorizedError('Not authenticated');
+  }
+  
+  if (!isStripeConfigured()) {
+    throw new ValidationError('Stripe is not configured', {
+      stripeEnabled: false,
+    });
+  }
+  
+  const user = await findUserById(authUser.userId);
+  if (!user) {
+    throw new UnauthorizedError('User not found');
+  }
+  
+  const currentTier = user.tier as TierName;
+  
+  if (currentTier === 'hobby') {
+    throw new ValidationError('No active subscription to cancel', {
+      currentTier,
+    });
+  }
+  
+  try {
+    await cancelSubscription(authUser.userId);
+    
+    return c.json({
+      success: true,
+      message: 'Subscription will be canceled at the end of the current billing period',
+      currentTier,
+    });
+  } catch (error) {
+    logger.error('Failed to cancel subscription', { 
+      userId: authUser.userId,
+      error: { name: error instanceof Error ? error.constructor.name : 'Error', message: error instanceof Error ? error.message : 'Unknown error' } 
+    });
+    throw new ValidationError(
+      error instanceof Error ? error.message : 'Failed to cancel subscription'
+    );
+  }
+});
+
+/**
+ * POST /api/v1/billing/reactivate
+ * Reactivate a canceled subscription
+ * Requires authentication
+ */
+billingRoutes.post('/reactivate', requireAuth, async (c) => {
+  const authUser = getAuthUser(c);
+  
+  if (!authUser) {
+    throw new UnauthorizedError('Not authenticated');
+  }
+  
+  if (!isStripeConfigured()) {
+    throw new ValidationError('Stripe is not configured', {
+      stripeEnabled: false,
+    });
+  }
+  
+  try {
+    await reactivateSubscription(authUser.userId);
+    
+    return c.json({
+      success: true,
+      message: 'Subscription reactivated successfully',
+    });
+  } catch (error) {
+    logger.error('Failed to reactivate subscription', { 
+      userId: authUser.userId,
+      error: { name: error instanceof Error ? error.constructor.name : 'Error', message: error instanceof Error ? error.message : 'Unknown error' } 
+    });
+    throw new ValidationError(
+      error instanceof Error ? error.message : 'Failed to reactivate subscription'
+    );
+  }
+});
+
+/**
+ * POST /api/v1/billing/upgrade
+ * Upgrade to a higher tier (legacy endpoint - redirects to checkout)
+ * Requires authentication
+ */
+billingRoutes.post('/upgrade', requireAuth, async (c) => {
   const authUser = getAuthUser(c);
   
   if (!authUser) {
@@ -199,10 +437,9 @@ billingRoutes.post('/upgrade', requireAuth, loadTierInfo, async (c) => {
   }
   
   if (comparison > 0) {
-    throw new ValidationError('Downgrade not supported via this endpoint', {
+    throw new ValidationError('Downgrade not supported via this endpoint. Use the billing portal.', {
       currentTier,
       requestedTier: targetTier,
-      message: 'Please contact support for downgrade requests',
     });
   }
   
@@ -213,31 +450,48 @@ billingRoutes.post('/upgrade', requireAuth, loadTierInfo, async (c) => {
       message: 'Enterprise tier requires custom setup',
       action: 'contact_sales',
       contactEmail: 'sales@onhyper.io',
-      // For now, allow immediate upgrade for testing
-      note: 'Stripe integration pending. For testing, upgrades are processed immediately.',
-      testing: {
-        upgradeAvailable: true,
-        targetTier,
-        currentTier,
-      },
     });
   }
   
   // Handle hobby to pro upgrade
   if (currentTier === 'hobby' && targetTier === 'pro') {
-    // TODO: Create Stripe checkout session
-    // For now, return placeholder response
+    // If Stripe is configured, redirect to checkout
+    if (isStripeConfigured()) {
+      const baseUrl = process.env.BASE_URL || 'http://localhost:3001';
+      
+      try {
+        const { url, sessionId } = await createCheckoutSession(
+          authUser.userId,
+          user.email,
+          `${baseUrl}/dashboard?billing=success`,
+          `${baseUrl}/dashboard?billing=canceled`
+        );
+        
+        return c.json({
+          success: true,
+          message: 'Pro tier upgrade initiated',
+          tier: targetTier,
+          tierName: targetConfig.displayName,
+          price: targetConfig.price,
+          checkoutUrl: url,
+          sessionId,
+        });
+      } catch (error) {
+        throw new ValidationError('Failed to create checkout session', {
+          message: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
     
     // DEVELOPMENT MODE: Allow immediate upgrade for testing
     const developmentMode = process.env.NODE_ENV !== 'production';
     
     if (developmentMode) {
-      // Update user tier directly for testing
       await updateUserTier(authUser.userId, targetTier);
       
       return c.json({
         success: true,
-        message: 'Tier upgraded successfully (development mode)',
+        message: 'Tier upgraded successfully (development mode - Stripe not configured)',
         tier: targetTier,
         tierName: targetConfig.displayName,
         price: targetConfig.price,
@@ -249,14 +503,12 @@ billingRoutes.post('/upgrade', requireAuth, loadTierInfo, async (c) => {
     
     return c.json({
       success: true,
-      message: 'Pro tier upgrade initiated',
+      message: 'Pro tier upgrade requires payment',
       tier: targetTier,
       tierName: targetConfig.displayName,
       price: targetConfig.price,
-      // TODO: Replace with actual Stripe checkout URL
-      checkoutUrl: null,
-      stripeSessionId: null,
-      note: 'Stripe integration pending. Contact support to complete upgrade.',
+      note: 'Stripe is not configured. Contact support to complete upgrade.',
+      stripeEnabled: false,
     });
   }
   
@@ -266,17 +518,14 @@ billingRoutes.post('/upgrade', requireAuth, loadTierInfo, async (c) => {
     message: 'Upgrade request received',
     currentTier,
     targetTier,
-    stripeIntegration: 'pending',
-    note: 'Stripe integration will be available soon',
+    stripeEnabled: isStripeConfigured(),
   });
 });
 
 /**
  * POST /api/v1/billing/downgrade
- * Downgrade to a lower tier
+ * Downgrade to a lower tier (schedule cancellation)
  * Requires authentication
- * 
- * Note: Downgrades typically take effect at end of billing period
  */
 billingRoutes.post('/downgrade', requireAuth, async (c) => {
   const authUser = getAuthUser(c);
@@ -328,69 +577,50 @@ billingRoutes.post('/downgrade', requireAuth, async (c) => {
     });
   }
   
-  // Downgrade to hobby is always allowed
-  if (targetTier === 'hobby') {
-    // DEVELOPMENT MODE: Allow immediate downgrade for testing
-    const developmentMode = process.env.NODE_ENV !== 'production';
-    
-    if (developmentMode) {
-      await updateUserTier(authUser.userId, targetTier);
+  // If Stripe is configured, cancel the subscription
+  if (isStripeConfigured()) {
+    try {
+      await cancelSubscription(authUser.userId);
+      
       const targetConfig = getTierConfig(targetTier);
       
       return c.json({
         success: true,
-        message: 'Tier downgraded successfully (development mode)',
-        tier: targetTier,
-        tierName: targetConfig.displayName,
-        note: 'In production, this would take effect at end of billing period',
+        message: `Downgrade scheduled. You'll be moved to ${targetConfig.displayName} at the end of your billing period.`,
+        currentTier,
+        targetTier,
+        effectiveDate: null, // Calculated from subscription
       });
+    } catch (error) {
+      throw new ValidationError(
+        error instanceof Error ? error.message : 'Failed to schedule downgrade'
+      );
     }
+  }
+  
+  // Development mode: Allow immediate downgrade
+  const developmentMode = process.env.NODE_ENV !== 'production';
+  
+  if (developmentMode) {
+    await updateUserTier(authUser.userId, targetTier);
+    const targetConfig = getTierConfig(targetTier);
     
     return c.json({
       success: true,
-      message: 'Downgrade scheduled for end of billing period',
-      currentTier,
-      targetTier,
-      effectiveDate: null, // TODO: Calculate from Stripe subscription
-      note: 'Stripe integration pending',
+      message: 'Tier downgraded successfully (development mode)',
+      tier: targetTier,
+      tierName: targetConfig.displayName,
+      note: 'In production, this would take effect at end of billing period',
     });
   }
-  
-  throw new NotImplementedError('Tier downgrade');
-});
-
-/**
- * POST /api/v1/billing/cancel
- * Cancel subscription (downgrade to hobby at end of period)
- * Requires authentication
- */
-billingRoutes.post('/cancel', requireAuth, async (c) => {
-  const authUser = getAuthUser(c);
-  
-  if (!authUser) {
-    throw new UnauthorizedError('Not authenticated');
-  }
-  
-  const user = await findUserById(authUser.userId);
-  if (!user) {
-    throw new UnauthorizedError('User not found');
-  }
-  
-  const currentTier = user.tier as TierName;
-  
-  if (currentTier === 'hobby') {
-    throw new ValidationError('No active subscription to cancel', {
-      currentTier,
-    });
-  }
-  
-  // TODO: Implement Stripe subscription cancellation
   
   return c.json({
     success: true,
-    message: 'Subscription cancellation requested',
+    message: 'Downgrade scheduled for end of billing period',
     currentTier,
-    note: 'Stripe integration pending. Contact support to cancel.',
+    targetTier,
+    effectiveDate: null,
+    note: 'Stripe integration pending',
   });
 });
 
@@ -399,7 +629,7 @@ billingRoutes.post('/cancel', requireAuth, async (c) => {
  * Compare current tier with another tier
  * Requires authentication
  */
-billingRoutes.get('/compare/:tier', requireAuth, loadTierInfo, async (c) => {
+billingRoutes.get('/compare/:tier', requireAuth, async (c) => {
   const authUser = getAuthUser(c);
   
   if (!authUser) {
@@ -414,7 +644,12 @@ billingRoutes.get('/compare/:tier', requireAuth, loadTierInfo, async (c) => {
     });
   }
   
-  const currentTier = getUserTier(c);
+  const user = await findUserById(authUser.userId);
+  if (!user) {
+    throw new UnauthorizedError('User not found');
+  }
+  
+  const currentTier = user.tier as TierName;
   const currentConfig = getTierConfig(currentTier);
   const targetConfig = getTierConfig(targetTierParam);
   
@@ -491,6 +726,11 @@ billingRoutes.get('/compare/:tier', requireAuth, loadTierInfo, async (c) => {
         price: targetConfig.price,
       },
       changes,
+    },
+    billing: {
+      stripeEnabled: isStripeConfigured(),
+      checkoutAvailable: comparison < 0 && targetTierParam === 'pro',
+      portalAvailable: !!await getSubscriptionDetails(authUser.userId).then(d => d?.hasSubscription),
     },
   });
 });

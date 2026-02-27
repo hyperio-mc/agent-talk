@@ -1,0 +1,846 @@
+openapi: 3.1.0
+info:
+  title: Agent Talk API
+  description: |
+    Text-to-speech API designed for AI agents. 
+    Send text, receive audio — one POST request, instant voice.
+    
+    ## Authentication
+    
+    - **API Key Auth**: For TTS operations (`Authorization: Bearer YOUR_API_KEY`)
+    - **Session Auth**: For user account management (cookie-based)
+    
+    ## Quick Start
+    
+    ```bash
+    # Sign up and get an API key
+    curl -X POST https://talk.onhyper.io/api/v1/auth/signup \
+      -H "Content-Type: application/json" \
+      -d '{"email": "you@example.com", "password": "your-password"}'
+    
+    # Convert text to speech
+    curl -X POST https://talk.onhyper.io/api/v1/memo \
+      -H "Authorization: Bearer YOUR_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{"text": "Hello!", "voice": "rachel"}'
+    ```
+  version: 1.0.0
+  contact:
+    name: Agent Talk Support
+    email: hello@hyper.io
+    url: https://talk.onhyper.io
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://talk.onhyper.io
+    description: Production
+  - url: http://localhost:3001
+    description: Development
+
+tags:
+  - name: Auth
+    description: User authentication and session management
+  - name: API Keys
+    description: API key management
+  - name: TTS
+    description: Text-to-speech operations
+  - name: Voices
+    description: Voice listing and information
+  - name: Health
+    description: API health and monitoring
+
+paths:
+  # ============================================
+  # Authentication
+  # ============================================
+  /api/v1/auth/signup:
+    post:
+      tags: [Auth]
+      summary: Create a new account
+      description: Sign up for a new account and receive an API key
+      operationId: signUp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignupRequest'
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignupResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in to your account
+      description: Authenticate and receive a session token
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Log out
+      description: End the current session
+      operationId: logout
+      responses:
+        '200':
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/auth/me:
+    get:
+      tags: [Auth]
+      summary: Get current user
+      description: Get the currently authenticated user
+      operationId: getCurrentUser
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ============================================
+  # API Keys
+  # ============================================
+  /api/keys:
+    get:
+      tags: [API Keys]
+      summary: List API keys
+      description: List all API keys for the authenticated user
+      operationId: listApiKeys
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: List of API keys
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    post:
+      tags: [API Keys]
+      summary: Create an API key
+      description: Create a new API key
+      operationId: createApiKey
+      security:
+        - cookieAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateApiKeyRequest'
+      responses:
+        '201':
+          description: API key created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateApiKeyResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/keys/{keyId}:
+    parameters:
+      - name: keyId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: API key ID
+
+    get:
+      tags: [API Keys]
+      summary: Get an API key
+      description: Get a specific API key by ID
+      operationId: getApiKey
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: API key details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [API Keys]
+      summary: Revoke an API key
+      description: Revoke (soft delete) an API key
+      operationId: revokeApiKey
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: API key revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      tags: [API Keys]
+      summary: Update an API key
+      description: Update an API key (currently only name)
+      operationId: updateApiKey
+      security:
+        - cookieAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateApiKeyRequest'
+      responses:
+        '200':
+          description: API key updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ============================================
+  # Text-to-Speech
+  # ============================================
+  /api/v1/voices:
+    get:
+      tags: [Voices]
+      summary: List voices
+      description: Get all available voices
+      operationId: listVoices
+      responses:
+        '200':
+          description: List of voices
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoicesResponse'
+
+  /api/v1/memo:
+    post:
+      tags: [TTS]
+      summary: Create a memo
+      description: Convert text to speech
+      operationId: createMemo
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMemoRequest'
+      responses:
+        '201':
+          description: Memo created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/demo:
+    post:
+      tags: [TTS]
+      summary: Demo endpoint
+      description: Try text-to-speech without an API key (simulation mode)
+      operationId: createDemo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMemoRequest'
+      responses:
+        '201':
+          description: Demo memo created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoResponse'
+
+  # ============================================
+  # Audio
+  # ============================================
+  /audio/{filename}:
+    get:
+      tags: [TTS]
+      summary: Get audio file
+      description: Retrieve a generated audio file
+      operationId: getAudio
+      parameters:
+        - name: filename
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^audio_[a-z0-9_-]+\.(mp3|wav|ogg|webm)$'
+          description: Audio filename
+      responses:
+        '200':
+          description: Audio file
+          content:
+            audio/mpeg:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ============================================
+  # Health
+  # ============================================
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      description: Basic health check for load balancers
+      operationId: healthCheck
+      responses:
+        '200':
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Service unavailable
+
+  /health/detailed:
+    get:
+      tags: [Health]
+      summary: Detailed health check
+      description: Detailed health check for all services
+      operationId: healthDetailed
+      responses:
+        '200':
+          description: Detailed health status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailedHealthResponse'
+
+  /health/ready:
+    get:
+      tags: [Health]
+      summary: Readiness check
+      description: Kubernetes readiness probe
+      operationId: healthReady
+      responses:
+        '200':
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+        '503':
+          description: Service not ready
+
+  /health/live:
+    get:
+      tags: [Health]
+      summary: Liveness check
+      description: Kubernetes liveness probe
+      operationId: healthLive
+      responses:
+        '200':
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveResponse'
+
+components:
+  # ============================================
+  # Security Schemes
+  # ============================================
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: API key authentication
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: auth_token
+      description: Session cookie authentication
+
+  # ============================================
+  # Responses
+  # ============================================
+  responses:
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    
+    Forbidden:
+      description: Access denied
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    
+    RateLimited:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  # ============================================
+  # Schemas
+  # ============================================
+  schemas:
+    # ---- User ----
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [user, admin]
+        createdAt:
+          type: string
+          format: date-time
+
+    SignupRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+
+    SignupResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        user:
+          $ref: '#/components/schemas/User'
+        token:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        apiKey:
+          $ref: '#/components/schemas/ApiKeyFull'
+        warning:
+          type: string
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    LoginResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        user:
+          $ref: '#/components/schemas/User'
+        token:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+
+    UserResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        user:
+          $ref: '#/components/schemas/User'
+
+    # ---- API Key ----
+    ApiKey:
+      type: object
+      properties:
+        id:
+          type: string
+        prefix:
+          type: string
+        maskedKey:
+          type: string
+        name:
+          type: string
+          nullable: true
+        usageCount:
+          type: integer
+        lastUsedAt:
+          type: string
+          format: date-time
+          nullable: true
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    ApiKeyFull:
+      type: object
+      properties:
+        id:
+          type: string
+        key:
+          type: string
+        prefix:
+          type: string
+        name:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    ApiKeyListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        keys:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiKey'
+
+    ApiKeyResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        key:
+          $ref: '#/components/schemas/ApiKey'
+
+    CreateApiKeyRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        test:
+          type: boolean
+          default: false
+
+    CreateApiKeyResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        key:
+          $ref: '#/components/schemas/ApiKeyFull'
+        warning:
+          type: string
+
+    UpdateApiKeyRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+
+    # ---- Voice ----
+    Voice:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        gender:
+          type: string
+          enum: [male, female]
+        description:
+          type: string
+
+    VoicesResponse:
+      type: object
+      properties:
+        voices:
+          type: array
+          items:
+            $ref: '#/components/schemas/Voice'
+
+    # ---- Memo ----
+    CreateMemoRequest:
+      type: object
+      required: [text, voice]
+      properties:
+        text:
+          type: string
+          maxLength: 20000
+          description: Text to convert to speech
+        voice:
+          type: string
+          description: Voice ID (e.g., 'rachel', 'adam')
+
+    MemoAudio:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Audio URL (data URL or https)
+        duration:
+          type: number
+          description: Duration in seconds
+        format:
+          type: string
+          enum: [mp3, wav, ogg, webm]
+
+    MemoVoice:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        gender:
+          type: string
+        description:
+          type: string
+
+    Memo:
+      type: object
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+        voice:
+          $ref: '#/components/schemas/MemoVoice'
+        audio:
+          $ref: '#/components/schemas/MemoAudio'
+        createdAt:
+          type: string
+          format: date-time
+
+    MemoResponse:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Memo'
+
+    # ---- Health ----
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        service:
+          type: string
+        version:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        ttsMode:
+          type: string
+          enum: [simulation, edge, elevenlabs]
+        database:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [ok, error]
+
+    DetailedHealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error, degraded]
+        version:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        uptime:
+          type: integer
+        checks:
+          type: object
+          properties:
+            database:
+              $ref: '#/components/schemas/HealthCheckResult'
+            storage:
+              $ref: '#/components/schemas/HealthCheckResult'
+            elevenlabs:
+              $ref: '#/components/schemas/HealthCheckResult'
+        metrics:
+          type: object
+          properties:
+            memory:
+              type: object
+              properties:
+                used:
+                  type: integer
+                total:
+                  type: integer
+                percentage:
+                  type: integer
+            responseTime:
+              type: integer
+
+    HealthCheckResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error, degraded]
+        message:
+          type: string
+        latency:
+          type: integer
+
+    ReadyResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        timestamp:
+          type: string
+          format: date-time
+        reason:
+          type: string
+
+    LiveResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [alive]
+        timestamp:
+          type: string
+          format: date-time
+        uptime:
+          type: integer
+
+    # ---- Common ----
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              enum:
+                - VALIDATION_ERROR
+                - INVALID_INPUT
+                - MISSING_FIELD
+                - INVALID_VOICE
+                - UNAUTHORIZED
+                - MISSING_API_KEY
+                - INVALID_API_KEY
+                - EXPIRED_TOKEN
+                - FORBIDDEN
+                - INSUFFICIENT_TIER
+                - REVOKED_KEY
+                - NOT_FOUND
+                - MEMO_NOT_FOUND
+                - RATE_LIMIT_EXCEEDED
+                - DAILY_LIMIT_EXCEEDED
+                - MONTHLY_LIMIT_EXCEEDED
+                - INTERNAL_ERROR
+                - TTS_SERVICE_ERROR
+                - STORAGE_ERROR
+                - NOT_IMPLEMENTED
+                - SERVICE_UNAVAILABLE
+            message:
+              type: string
+            details:
+              type: object
+              additionalProperties: true

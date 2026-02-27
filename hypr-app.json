@@ -1,0 +1,148 @@
+{
+  "name": "Agent Talk",
+  "slug": "talk",
+  "version": "1.0.0",
+  "description": "TTS API for AI agents - Give your AI agent a voice",
+  "type": "spa",
+  "entrypoint": "dist/index.html",
+  "build": {
+    "command": "npm run build",
+    "output": "dist"
+  },
+  "routes": {
+    "proxy": [
+      {
+        "name": "elevenlabs",
+        "description": "ElevenLabs TTS API - Text to speech generation",
+        "path": "/api/proxy/elevenlabs/*",
+        "target": "https://api.elevenlabs.io/v1",
+        "inject": ["ELEVENLABS_API_KEY"],
+        "headers": {
+          "xi-api-key": "{{ELEVENLABS_API_KEY}}"
+        }
+      },
+      {
+        "name": "stripe",
+        "description": "Stripe API - Payments and subscriptions",
+        "path": "/api/proxy/stripe/*",
+        "target": "https://api.stripe.com",
+        "inject": ["STRIPE_SECRET_KEY"],
+        "headers": {
+          "Authorization": "Bearer {{STRIPE_SECRET_KEY}}"
+        }
+      },
+      {
+        "name": "workos",
+        "description": "WorkOS API - Authentication and SSO",
+        "path": "/api/proxy/workos/*",
+        "target": "https://api.workos.com",
+        "inject": ["WORKOS_API_KEY"],
+        "headers": {
+          "Authorization": "Bearer {{WORKOS_API_KEY}}"
+        }
+      },
+      {
+        "name": "hypermicro",
+        "description": "HYPER Micro API - Database and storage",
+        "path": "/api/proxy/hypermicro/*",
+        "target": "{{HYPERMICRO_URL}}",
+        "inject": ["HYPERMICRO_API_KEY"],
+        "headers": {
+          "X-API-Key": "{{HYPERMICRO_API_KEY}}"
+        }
+      }
+    ]
+  },
+  "secrets": [
+    "ELEVENLABS_API_KEY",
+    "STRIPE_SECRET_KEY",
+    "WORKOS_API_KEY",
+    "HYPERMICRO_API_KEY"
+  ],
+  "storage": {
+    "buckets": [
+      {
+        "name": "audio",
+        "public": true,
+        "maxSize": "10MB",
+        "allowedTypes": ["audio/mpeg", "audio/mp3", "audio/wav"]
+      }
+    ]
+  },
+  "micro": {
+    "tables": [
+      {
+        "name": "users",
+        "schema": {
+          "id": "TEXT PRIMARY KEY",
+          "email": "TEXT UNIQUE",
+          "tier": "TEXT DEFAULT 'hobby'",
+          "role": "TEXT DEFAULT 'user'",
+          "created_at": "TEXT",
+          "updated_at": "TEXT"
+        }
+      },
+      {
+        "name": "api_keys",
+        "schema": {
+          "id": "TEXT PRIMARY KEY",
+          "user_id": "TEXT",
+          "key_hash": "TEXT",
+          "prefix": "TEXT",
+          "name": "TEXT",
+          "is_active": "INTEGER DEFAULT 1",
+          "usage_count": "INTEGER DEFAULT 0",
+          "created_at": "TEXT",
+          "last_used_at": "TEXT"
+        }
+      },
+      {
+        "name": "memos",
+        "schema": {
+          "id": "TEXT PRIMARY KEY",
+          "user_id": "TEXT",
+          "api_key_id": "TEXT",
+          "text": "TEXT",
+          "voice": "TEXT",
+          "audio_url": "TEXT",
+          "duration_seconds": "REAL",
+          "character_count": "INTEGER",
+          "created_at": "TEXT"
+        }
+      },
+      {
+        "name": "usage_logs",
+        "schema": {
+          "id": "TEXT PRIMARY KEY",
+          "user_id": "TEXT",
+          "action": "TEXT",
+          "metadata": "JSON",
+          "created_at": "TEXT"
+        }
+      },
+      {
+        "name": "subscriptions",
+        "schema": {
+          "id": "TEXT PRIMARY KEY",
+          "user_id": "TEXT",
+          "tier": "TEXT",
+          "stripe_customer_id": "TEXT",
+          "stripe_subscription_id": "TEXT",
+          "status": "TEXT",
+          "created_at": "TEXT",
+          "updated_at": "TEXT"
+        }
+      }
+    ]
+  },
+  "env": {
+    "HYPR_MODE": "production",
+    "TTS_MODE": "edge",
+    "NODE_ENV": "production",
+    "STORAGE_BACKEND": "hypr"
+  },
+  "domains": {
+    "primary": "talk.onhyper.io",
+    "aliases": []
+  }
+}

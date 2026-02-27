@@ -54,20 +54,20 @@ const VERSION = process.env.npm_package_version || process.env.APP_VERSION || '1
 async function checkDatabase(): Promise<HealthCheckResult> {
   const start = Date.now();
   try {
-    const dbHealth = checkDbHealth();
+    const dbHealth = await checkDbHealth();
     const latency = Date.now() - start;
-    
+
     if (dbHealth.status === 'ok') {
       return {
         status: 'ok',
         latency,
         details: {
-          path: dbHealth.path,
-          tables: dbHealth.tables
+          path: (dbHealth as { path?: string }).path,
+          tables: (dbHealth as { tables?: string[] }).tables
         }
       };
     }
-    
+
     return {
       status: 'error',
       message: 'Database health check failed',
@@ -191,16 +191,17 @@ function getMemoryUsage() {
  */
 healthRoutes.get('/', async (c) => {
   const start = Date.now();
-  
+
   // Quick database ping
-  const dbHealth = await checkDatabase();
-  
+  const dbHealth = await checkDbHealth();
+
   if (dbHealth.status !== 'ok') {
     return c.json({
       status: 'error',
       service: 'Agent Talk API',
       version: VERSION,
       timestamp: new Date().toISOString(),
+      ttsMode: process.env.TTS_MODE || 'simulation',
       error: 'Database unavailable'
     }, 503);
   }
@@ -210,7 +211,13 @@ healthRoutes.get('/', async (c) => {
     service: 'Agent Talk API',
     version: VERSION,
     timestamp: new Date().toISOString(),
-    responseTime: Date.now() - start
+    ttsMode: process.env.TTS_MODE || 'simulation',
+    responseTime: Date.now() - start,
+    database: {
+      status: 'ok',
+      path: (dbHealth as { path?: string }).path,
+      tables: (dbHealth as { tables?: string[] }).tables
+    }
   });
 });
 
@@ -219,16 +226,16 @@ healthRoutes.get('/', async (c) => {
  */
 healthRoutes.get('/detailed', async (c) => {
   const start = Date.now();
-  
+
   // Run all health checks in parallel
   const [database, storage, elevenlabs] = await Promise.all([
-    checkDatabase(),
+    checkDbHealth(),
     checkStorage(),
     checkElevenLabs()
   ]);
-  
+
   // Determine overall status
-  const checks = { database, storage, ...(elevenlabs && { elevenlabs }) };
+  const checks = { database: { status: database.status, message: database.message, latency: 0, details: { path: (database as { path?: string }).path, tables: (database as { tables?: string[] }).tables } }, storage, ...(elevenlabs && { elevenlabs }) };
   const statuses = Object.values(checks).map(c => c.status);
   
   let overallStatus: 'ok' | 'error' | 'degraded' = 'ok';
@@ -243,7 +250,11 @@ healthRoutes.get('/detailed', async (c) => {
     version: VERSION,
     timestamp: new Date().toISOString(),
     uptime: Math.floor((Date.now() - startTime) / 1000),
-    checks,
+    checks: {
+      database: { status: database.status as 'ok' | 'error' | 'degraded', message: database.message, latency: 0 },
+      storage,
+      ...(elevenlabs && { elevenlabs }),
+    },
     metrics: {
       memory: getMemoryUsage(),
       responseTime: Date.now() - start
@@ -259,8 +270,8 @@ healthRoutes.get('/detailed', async (c) => {
  */
 healthRoutes.get('/ready', async (c) => {
   // Check critical dependencies only
-  const database = await checkDatabase();
-  
+  const database = await checkDbHealth();
+
   if (database.status !== 'ok') {
     return c.json({
       status: 'not_ready',
@@ -292,7 +303,7 @@ healthRoutes.get('/metrics', async (c) => {
   const start = Date.now();
   
   const [database, storage] = await Promise.all([
-    checkDatabase(),
+    Promise.resolve(checkDbHealth()),
     checkStorage()
   ]);
   
@@ -326,7 +337,7 @@ agent_talk_database_healthy ${database.status === 'ok' ? 1 : 0}
 
 # HELP agent_talk_database_latency_ms Database check latency in ms
 # TYPE agent_talk_database_latency_ms gauge
-agent_talk_database_latency_ms ${database.latency || 0}
+agent_talk_database_latency_ms 0
 
 # HELP agent_talk_storage_healthy Storage health status
 # TYPE agent_talk_storage_healthy gauge

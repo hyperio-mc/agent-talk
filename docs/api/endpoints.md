@@ -458,6 +458,268 @@ curl https://talk.onhyper.io/health
 
 ---
 
+## Audio Endpoints
+
+### GET /audio/:filename
+
+Retrieve a generated audio file.
+
+**Authentication:** None (public)
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `filename` | string | Audio filename (e.g., `audio_abc123.mp3`) |
+
+**Example Request:**
+
+```bash
+curl https://talk.onhyper.io/audio/audio_abc123.mp3 --output audio.mp3
+```
+
+**Response Headers:**
+
+| Header | Value |
+|--------|-------|
+| `Content-Type` | `audio/mpeg` |
+| `Cache-Control` | `public, max-age=31536000, immutable` |
+| `Access-Control-Allow-Origin` | `*` |
+
+**Error Responses:**
+
+- `404 Not Found` — Audio file not found
+
+**Note:** Audio files are stored permanently and can be played directly in browsers or downloaded. The URLs are returned by the `/api/v1/memo` endpoint.
+
+---
+
+## Health Endpoints
+
+### GET /health
+
+Basic health check for load balancers and uptime monitoring.
+
+**Authentication:** None (public)
+
+**Example Request:**
+
+```bash
+curl https://talk.onhyper.io/health
+```
+
+**Success Response (200 OK):**
+
+```json
+{
+  "status": "ok",
+  "service": "Agent Talk API",
+  "version": "1.0.0",
+  "timestamp": "2026-02-27T14:00:00Z",
+  "ttsMode": "elevenlabs",
+  "database": {
+    "status": "ok"
+  }
+}
+```
+
+**Error Response (503 Service Unavailable):**
+
+```json
+{
+  "status": "error",
+  "service": "Agent Talk API",
+  "version": "1.0.0",
+  "timestamp": "2026-02-27T14:00:00Z",
+  "ttsMode": "simulation",
+  "error": "Database unavailable"
+}
+```
+
+---
+
+### GET /health/detailed
+
+Detailed health check for all services.
+
+**Authentication:** None (public)
+
+**Example Request:**
+
+```bash
+curl https://talk.onhyper.io/health/detailed
+```
+
+**Success Response (200 OK):**
+
+```json
+{
+  "status": "ok",
+  "version": "1.0.0",
+  "timestamp": "2026-02-27T14:00:00Z",
+  "uptime": 86400,
+  "checks": {
+    "database": {
+      "status": "ok",
+      "latency": 5
+    },
+    "storage": {
+      "status": "ok",
+      "latency": 2
+    },
+    "elevenlabs": {
+      "status": "ok",
+      "latency": 120
+    }
+  },
+  "metrics": {
+    "memory": {
+      "used": 128,
+      "total": 512,
+      "percentage": 25
+    },
+    "responseTime": 127
+  }
+}
+```
+
+---
+
+### GET /health/ready
+
+Kubernetes readiness probe - is the app ready to receive traffic?
+
+**Authentication:** None (public)
+
+**Example Request:**
+
+```bash
+curl https://talk.onhyper.io/health/ready
+```
+
+**Success Response (200 OK):**
+
+```json
+{
+  "status": "ready",
+  "timestamp": "2026-02-27T14:00:00Z"
+}
+```
+
+**Error Response (503 Service Unavailable):**
+
+```json
+{
+  "status": "not_ready",
+  "reason": "Database unavailable"
+}
+```
+
+---
+
+### GET /health/live
+
+Kubernetes liveness probe - is the app alive?
+
+**Authentication:** None (public)
+
+**Example Request:**
+
+```bash
+curl https://talk.onhyper.io/health/live
+```
+
+**Success Response (200 OK):**
+
+```json
+{
+  "status": "alive",
+  "timestamp": "2026-02-27T14:00:00Z",
+  "uptime": 86400
+}
+```
+
+---
+
+### GET /health/metrics
+
+Prometheus-style metrics for monitoring systems.
+
+**Authentication:** None (public)
+
+**Example Request:**
+
+```bash
+curl https://talk.onhyper.io/health/metrics
+```
+
+**Response (text/plain):**
+
+```
+# HELP agent_talk_up Whether the service is up
+# TYPE agent_talk_up gauge
+agent_talk_up 1
+
+# HELP agent_talk_uptime_seconds Service uptime in seconds
+# TYPE agent_talk_uptime_seconds counter
+agent_talk_uptime_seconds 86400
+
+# HELP agent_talk_memory_used_mb Memory used in MB
+# TYPE agent_talk_memory_used_mb gauge
+agent_talk_memory_used_mb 128
+
+# HELP agent_talk_database_healthy Database health status
+# TYPE agent_talk_database_healthy gauge
+agent_talk_database_healthy 1
+
+# HELP agent_talk_storage_healthy Storage health status
+# TYPE agent_talk_storage_healthy gauge
+agent_talk_storage_healthy 1
+```
+
+---
+
+## Metrics Endpoint
+
+### GET /api/v1/metrics
+
+Get API metrics and performance data.
+
+**Authentication:** None (public)
+
+**Example Request:**
+
+```bash
+curl https://talk.onhyper.io/api/v1/metrics
+```
+
+**Success Response (200 OK):**
+
+```json
+{
+  "memos": {
+    "total": 15420,
+    "today": 234,
+    "avgDuration": 2.5
+  },
+  "users": {
+    "total": 892,
+    "active": 156
+  },
+  "apiKeys": {
+    "total": 1205,
+    "active": 987
+  },
+  "performance": {
+    "avgLatency": 120,
+    "p95Latency": 350,
+    "p99Latency": 890
+  }
+}
+```
+
+---
+
 ## Response Format
 
 All endpoints follow a consistent response format.

@@ -188,14 +188,14 @@ export async function signUp(input: SignUpInput): Promise<AuthResult> {
 export async function login(input: LoginInput): Promise<AuthResult> {
   // Find user by email
   const user = await findUserByEmail(input.email);
-  
-  if (!user) {
+
+  if (!user || !user.passwordHash) {
     throw new UnauthorizedError('Invalid email or password');
   }
-  
+
   // Verify password
   const isValid = await verifyPassword(input.password, user.passwordHash);
-  
+
   if (!isValid) {
     throw new UnauthorizedError('Invalid email or password');
   }
@@ -285,13 +285,13 @@ export async function changePassword(
 ): Promise<boolean> {
   const user = await findUserById(userId);
   
-  if (!user) {
+  if (!user || !user.passwordHash) {
     throw new Error('User not found');
   }
-  
+
   // Verify current password
   const isValid = await verifyPassword(currentPassword, user.passwordHash);
-  
+
   if (!isValid) {
     throw new Error('Current password is incorrect');
   }
@@ -303,14 +303,7 @@ export async function changePassword(
   
   // Hash and update password
   const passwordHash = await hashPassword(newPassword);
-  await updateUser(userId, { });
+  const updated = await updateUser(userId, { passwordHash });
   
-  // Direct update of password hash (bypassing the updateUser function)
-  const updatedUser = await findUserById(userId);
-  if (updatedUser) {
-    updatedUser.passwordHash = passwordHash;
-    return true;
-  }
-  
-  return false;
+  return updated !== null;
 }

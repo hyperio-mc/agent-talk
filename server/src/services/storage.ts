@@ -1,29 +1,28 @@
 /**
- * Storage Service - Abstract storage interface for audio files
+ * Storage Service - HYPR Storage Implementation
  * 
  * Supports multiple backends:
+ * - hypr: HYPR Storage via proxy (production)
+ * - micro: HYPR Micro storage API
  * - local: Filesystem storage (development)
- * - s3: Amazon S3 (production) - future
- * - r2: Cloudflare R2 (production) - future
+ * 
+ * @see HYPR-REFACTOR-PLAN.md Phase 4
  */
 
 import { randomBytes } from 'crypto';
 import { mkdirSync, existsSync, writeFileSync, readFileSync, unlinkSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { StorageError } from '../errors/index.js';
+import { getStorageClient, HyprStorageClient } from '../lib/hypr-storage.js';
 import { logger } from '../utils/logger.js';
+import { StorageError } from '../errors/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export interface StorageConfig {
-  backend: 'local' | 's3' | 'r2';
+  backend: 'hypr' | 'micro' | 'local';
+  bucket?: string; // For HYPR storage
   basePath?: string; // For local storage
-  bucket?: string; // For S3/R2
-  region?: string;
-  endpoint?: string;
-  accessKeyId?: string;
-  secretAccessKey?: string;
 }
 
 export interface UploadResult {
@@ -48,14 +47,13 @@ export interface AudioFile {
 let storageInstance: StorageService | null = null;
 
 export function initStorage(config?: Partial<StorageConfig>): StorageService {
+  const backend = (process.env.STORAGE_BACKEND as StorageConfig['backend']) || 
+    (process.env.HYPR_MODE === 'production' ? 'hypr' : 'local');
+  
   const finalConfig: StorageConfig = {
-    backend: (process.env.STORAGE_BACKEND as StorageConfig['backend']) || 'local',
+    backend,
+    bucket: process.env.STORAGE_BUCKET || 'audio',
     basePath: process.env.STORAGE_PATH || join(__dirname, '../../../data/audio'),
-    bucket: process.env.STORAGE_BUCKET,
-    region: process.env.STORAGE_REGION,
-    endpoint: process.env.STORAGE_ENDPOINT,
-    accessKeyId: process.env.STORAGE_ACCESS_KEY_ID,
-    secretAccessKey: process.env.STORAGE_SECRET_ACCESS_KEY,
     ...config,
   };
 
@@ -64,7 +62,7 @@ export function initStorage(config?: Partial<StorageConfig>): StorageService {
   }
 
   storageInstance = new StorageService(finalConfig);
-  logger.info('Storage initialized', { backend: finalConfig.backend });
+  logger.info('Storage initialized', { backend: finalConfig.backend, bucket: finalConfig.bucket });
   
   return storageInstance;
 }
@@ -78,11 +76,14 @@ export function getStorage(): StorageService {
 
 export class StorageService {
   private config: StorageConfig;
+  private hyprClient: HyprStorageClient | null = null;
 
   constructor(config: StorageConfig) {
     this.config = config;
 
-    if (config.backend === 'local') {
+    if (config.backend === 'hypr' || config.backend === 'micro') {
+      this.hyprClient = getStorageClient();
+    } else if (config.backend === 'local') {
       this.ensureDirectory();
     }
   }
@@ -105,33 +106,26 @@ export class StorageService {
   ): Promise<UploadResult> {
     const id = this.generateId();
     const key = `${id}.${format}`;
+    const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
 
     try {
-      let size: number;
-      
+      let url: string;
+      let size: number = buffer.length;
+
       switch (this.config.backend) {
-        case 'local':
-          size = await this.uploadLocal(key, data);
+        case 'hypr':
+        case 'micro':
+          url = await this.uploadHypr(key, buffer, format);
           break;
-        case 's3':
-        case 'r2':
-          // Future: Implement S3/R2 upload
-          throw new StorageError(`${this.config.backend} storage not implemented`);
+        case 'local':
         default:
-          throw new StorageError(`Unknown storage backend: ${this.config.backend}`);
+          url = await this.uploadLocal(key, buffer);
+          break;
       }
 
-      const url = this.getUrl(key);
+      logger.debug('Audio uploaded', { id, key, size, format, backend: this.config.backend });
 
-      logger.debug('Audio uploaded', { id, key, size, format });
-
-      return {
-        id,
-        url,
-        key,
-        size,
-        format,
-      };
+      return { id, url, key, size, format };
     } catch (error) {
       logger.logError('Failed to upload audio', error, { id });
       throw new StorageError('upload');
@@ -148,17 +142,20 @@ export class StorageService {
       let size: number;
 
       switch (this.config.backend) {
-        case 'local':
-          const result = this.getLocal(key);
-          data = result.data;
-          createdAt = result.createdAt;
-          size = result.size;
+        case 'hypr':
+        case 'micro':
+          const hyprResult = await this.getHypr(key);
+          data = hyprResult.data;
+          createdAt = hyprResult.createdAt;
+          size = hyprResult.size;
           break;
-        case 's3':
-        case 'r2':
-          throw new StorageError(`${this.config.backend} storage not implemented`);
+        case 'local':
         default:
-          throw new StorageError(`Unknown storage backend: ${this.config.backend}`);
+          const localResult = this.getLocal(key);
+          data = localResult.data;
+          createdAt = localResult.createdAt;
+          size = localResult.size;
+          break;
       }
 
       const format = this.getFormatFromKey(key);
@@ -182,13 +179,12 @@ export class StorageService {
   async delete(key: string): Promise<boolean> {
     try {
       switch (this.config.backend) {
+        case 'hypr':
+        case 'micro':
+          return await this.deleteHypr(key);
         case 'local':
-          return this.deleteLocal(key);
-        case 's3':
-        case 'r2':
-          throw new StorageError(`${this.config.backend} storage not implemented`);
         default:
-          throw new StorageError(`Unknown storage backend: ${this.config.backend}`);
+          return this.deleteLocal(key);
       }
     } catch (error) {
       logger.logError('Failed to delete audio', error, { key });
@@ -200,8 +196,20 @@ export class StorageService {
    * Get public URL for audio file
    */
   getUrl(key: string): string {
-    const baseUrl = process.env.BASE_URL || 'http://localhost:3001';
-    return `${baseUrl}/audio/${key}`;
+    switch (this.config.backend) {
+      case 'hypr':
+      case 'micro':
+        if (this.hyprClient) {
+          return this.hyprClient.getUrl(this.config.bucket!, key);
+        }
+        // Fallback to platform URL
+        const platformUrl = process.env.HYPR_PLATFORM_URL || 'https://onhyper.io';
+        return `${platformUrl}/storage/${this.config.bucket}/${key}`;
+      case 'local':
+      default:
+        const baseUrl = process.env.BASE_URL || 'http://localhost:3001';
+        return `${baseUrl}/audio/${key}`;
+    }
   }
 
   /**
@@ -209,6 +217,49 @@ export class StorageService {
    */
   getLocalPath(key: string): string {
     return join(this.config.basePath!, key);
+  }
+
+  // --- HYPR Storage methods ---
+
+  private async uploadHypr(key: string, data: Buffer, format: string): Promise<string> {
+    if (!this.hyprClient) {
+      throw new Error('HYPR storage client not initialized');
+    }
+
+    // Ensure bucket exists
+    await this.hyprClient.ensureBucket(this.config.bucket!);
+
+    const file = await this.hyprClient.upload({
+      bucket: this.config.bucket!,
+      filename: key,
+      data,
+      contentType: `audio/${format}`,
+      public: true,
+    });
+
+    return file.url;
+  }
+
+  private async getHypr(key: string): Promise<{ data: Buffer; createdAt: Date; size: number }> {
+    if (!this.hyprClient) {
+      throw new Error('HYPR storage client not initialized');
+    }
+
+    const data = await this.hyprClient.download(this.config.bucket!, key);
+    
+    return {
+      data,
+      createdAt: new Date(), // HYPR doesn't provide creation date
+      size: data.length,
+    };
+  }
+
+  private async deleteHypr(key: string): Promise<boolean> {
+    if (!this.hyprClient) {
+      throw new Error('HYPR storage client not initialized');
+    }
+
+    return this.hyprClient.delete(this.config.bucket!, key);
   }
 
   // --- Local storage methods ---
@@ -220,13 +271,10 @@ export class StorageService {
     }
   }
 
-  private async uploadLocal(key: string, data: ArrayBuffer | Buffer): Promise<number> {
+  private async uploadLocal(key: string, data: Buffer): Promise<string> {
     const filePath = this.getLocalPath(key);
-    const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-    
-    writeFileSync(filePath, buffer);
-    
-    return buffer.length;
+    writeFileSync(filePath, data);
+    return this.getUrl(key);
   }
 
   private getLocal(key: string): { data: Buffer; createdAt: Date; size: number } {

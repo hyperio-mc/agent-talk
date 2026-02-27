@@ -2,7 +2,6 @@
 import 'dotenv/config';
 
 import { Hono } from 'hono';
-import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { MemoService } from './services/memo.js';
 import { initStorage } from './services/storage.js';
@@ -13,9 +12,15 @@ import { audioRoutes } from './routes/audio.js';
 import { dashboardRoutes } from './routes/dashboard.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { billingRoutes } from './routes/billing.js';
+import { webhookRoutes } from './routes/webhooks.js';
 import { healthRoutes } from './routes/health.js';
 import { requestLogger } from './middleware/requestLogger.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { 
+  securityHeaders, 
+  corsMiddleware, 
+  DEFAULT_CORS_CONFIG 
+} from './middleware/security.js';
 import { logger } from './utils/logger.js';
 import {
   ValidationError,
@@ -62,8 +67,20 @@ app.use('*', requestLogger({
   skipPaths: ['/health', '/favicon.ico']
 }));
 
-// Enable CORS
-app.use('*', cors());
+// Security headers middleware (CSP, XSS Protection, Frame Options, etc.)
+app.use('*', securityHeaders({
+  csp: true,
+  xssProtection: true,
+  contentTypeOptions: true,
+  frameOptions: 'DENY',
+  hsts: process.env.NODE_ENV === 'production',
+  referrerPolicy: true,
+  permissionsPolicy: true,
+  hidePoweredBy: true,
+}));
+
+// CORS middleware with origin validation
+app.use('*', corsMiddleware(DEFAULT_CORS_CONFIG));
 
 // Global error handler (will catch errors from routes)
 app.onError(errorHandler({
@@ -105,6 +122,9 @@ app.route('/api/v1/analytics', analyticsRoutes);
 // Billing routes (tier info, upgrades)
 app.route('/api/v1/billing', billingRoutes);
 
+// Stripe webhook routes (no auth required)
+app.route('/api/webhooks', webhookRoutes);
+
 // Audio file serving routes
 app.route('/audio', audioRoutes);
 
@@ -127,6 +147,9 @@ app.get('/api/v1/voices', (c) => {
 });
 
 // Public demo endpoint (no API key required - uses simulation mode)
+// Demo has a smaller character limit for abuse prevention
+const DEMO_MAX_CHARS = 1000;
+
 app.post('/api/v1/demo', async (c) => {
   // Parse and validate request body
   let body: { text?: unknown; voice?: unknown };
@@ -144,6 +167,18 @@ app.post('/api/v1/demo', async (c) => {
   }
   if (typeof text !== 'string') {
     throw new InvalidInputError('text', 'expected string', text);
+  }
+
+  // Check character limit for demo endpoint
+  if (text.length > DEMO_MAX_CHARS) {
+    throw new ValidationError(
+      `Character limit exceeded. Demo allows up to ${DEMO_MAX_CHARS} characters per request.`,
+      {
+        field: 'text',
+        limit: DEMO_MAX_CHARS,
+        provided: text.length,
+      }
+    );
   }
 
   // Validate voice field
@@ -182,7 +217,7 @@ app.post('/api/v1/memo', async (c) => {
   // Validate API key (throws InvalidApiKeyError or RevokedKeyError)
   let keyInfo: { keyId: string; userId: string };
   try {
-    keyInfo = validateApiKey(apiKey);
+    keyInfo = await validateApiKey(apiKey);
   } catch (error: unknown) {
     // Re-throw AppErrors as-is
     if (error instanceof InvalidApiKeyError) {
@@ -264,18 +299,15 @@ app.post('/api/v1/memo', async (c) => {
   }
 
   // Store memo in database
-  const memoRecord = createMemo({
+  const memoRecord = await createMemo({
     userId: keyInfo.userId,
-    apiKeyId: keyInfo.keyId,
-    text: memo.text,
-    voice: memo.voice.id,
     audioUrl: memo.audio.url,
-    durationSeconds: memo.audio.duration,
-    characterCount: text.length,
+    durationSec: memo.audio.duration,
+    title: undefined,
   });
 
   // Record API key usage (increment usage count)
-  recordKeyUsage(keyInfo.keyId);
+  await recordKeyUsage(keyInfo.keyId);
 
   // Log analytics event
   logMemoCreated(keyInfo.userId, keyInfo.keyId, {
@@ -345,19 +377,23 @@ if (typeof process !== 'undefined' && import.meta.url === `file://${process.argv
   const { serve } = await import('@hono/node-server');
   const port = parseInt(process.env.PORT || '3001');
   
-  // Initialize database
+  // Initialize database (async for HYPR Micro)
   logger.info('Initializing database...');
-  runMigrations();
+  await runMigrations();
   
   // Initialize storage
   logger.info('Initializing storage...');
   initStorage();
   
+  // Check database health
+  const health = await checkHealth();
+  logger.info(`Database ready: ${health.message} (${health.mode})`);
+  
   // Seed development data if enabled
   if (process.env.SEED_ON_START === 'true') {
     const { seedDatabase } = await import('./db/seed.js');
     logger.info('Seeding development data...');
-    seedDatabase();
+    await seedDatabase();
   }
   
   serve({
@@ -366,6 +402,7 @@ if (typeof process !== 'undefined' && import.meta.url === `file://${process.argv
   });
   
   logger.info(`🎙️  Agent Talk API running on http://localhost:${port}`);
+  logger.info(`Mode: ${process.env.HYPR_MODE === 'production' ? 'HYPR Production' : 'Development'}`);
   
   // Graceful shutdown
   process.on('SIGINT', () => {

@@ -1,0 +1,56 @@
+name: Deploy to Railway
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    # Allow manual trigger
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Railway CLI
+        run: |
+          curl -fsSL https://railway.app/install.sh | sh
+          echo "$HOME/.railway/bin" >> $GITHUB_PATH
+      
+      - name: Deploy to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway up --ci --service agent-talk --project ${{ secrets.RAILWAY_PROJECT_ID }}
+      
+      - name: Health Check
+        run: |
+          echo "Waiting for deployment to be ready..."
+          sleep 30
+          
+          # Retry health check up to 5 times
+          for i in {1..5}; do
+            echo "Health check attempt $i..."
+            RESPONSE=$(curl -s -o response.json -w '%{http_code}' https://talk.onhyper.io/health)
+            
+            if [ "$RESPONSE" -eq 200 ]; then
+              echo "✅ Health check passed!"
+              cat response.json
+              exit 0
+            fi
+            
+            echo "Health check returned HTTP $RESPONSE"
+            cat response.json 2>/dev/null || echo "No response body"
+            
+            if [ $i -lt 5 ]; then
+              echo "Retrying in 10 seconds..."
+              sleep 10
+            fi
+          done
+          
+          echo "❌ Health check failed after 5 attempts"
+          exit 1

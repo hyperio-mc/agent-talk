@@ -12,11 +12,17 @@ export default defineConfig({
     rollupOptions: {
       input: {
         app: resolve(__dirname, 'index.html'),
-        dashboard: resolve(__dirname, 'dashboard.html')
+        login: resolve(__dirname, 'login.html'),
+        dashboard: resolve(__dirname, 'dashboard.html'),
+        usage: resolve(__dirname, 'usage.html'),
+        keys: resolve(__dirname, 'keys.html')
       },
       output: {
         entryFileNames: (chunkInfo) => {
           if (chunkInfo.name === 'dashboard') return 'dashboard.js'
+          if (chunkInfo.name === 'login') return 'login.js'
+          if (chunkInfo.name === 'usage') return 'usage.js'
+          if (chunkInfo.name === 'keys') return 'keys.js'
           return 'app.js'
         },
         assetFileNames: 'app.[ext]'
