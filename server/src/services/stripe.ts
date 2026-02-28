@@ -2,13 +2,16 @@
  * Stripe Integration Service
  * 
  * Handles Stripe checkout, customer portal, and subscription management.
+ * Uses HYPR proxy for all Stripe API calls in production.
+ * 
+ * @see HYPR-REFACTOR-PLAN.md Phase 6 - Billing
  */
 
 import Stripe from 'stripe';
 import { 
   findUserById, 
   updateUserTier 
-} from '../db/users.js';
+} from '../db-stub/users.js';
 import {
   createSubscription,
   getSubscriptionByUserId,
@@ -17,14 +20,17 @@ import {
   updateSubscription,
   SubscriptionTier,
   SubscriptionStatus,
-} from '../db/subscriptions.js';
+} from '../db-stub/subscriptions.js';
 import { TIERS, TierName } from '../config/tiers.js';
 import { logger } from '../utils/logger.js';
+import { getProxyClient, HyprProxyClient } from '../lib/hypr-proxy.js';
+import { getHyprConfig } from '../lib/hypr-config.js';
 
-// Initialize Stripe
+// Stripe configuration
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 const STRIPE_PRO_PRICE_ID = process.env.STRIPE_PRO_PRICE_ID;
+const USE_HYPR_PROXY = process.env.USE_HYPR_PROXY === 'true' || process.env.HYPR_MODE === 'production';
 
 // Price ID to tier mapping
 const PRICE_TO_TIER: Record<string, TierName> = {
@@ -32,9 +38,13 @@ const PRICE_TO_TIER: Record<string, TierName> = {
   // Add more price IDs here for other tiers
 };
 
-// Get Stripe client (lazy initialization)
+// Stripe client for webhook verification (uses SDK directly)
 let stripeClient: Stripe | null = null;
 
+/**
+ * Get Stripe SDK client (for webhook verification only)
+ * In production, all Stripe API calls go through HYPR proxy
+ */
 export function getStripe(): Stripe | null {
   if (!STRIPE_SECRET_KEY) {
     return null;
@@ -51,18 +61,141 @@ export function getStripe(): Stripe | null {
  * Check if Stripe is configured
  */
 export function isStripeConfigured(): boolean {
+  // In HYPR mode, STRIPE_SECRET_KEY is injected via proxy
+  // We still need STRIPE_WEBHOOK_SECRET and STRIPE_PRO_PRICE_ID locally
+  if (USE_HYPR_PROXY) {
+    return !!(STRIPE_WEBHOOK_SECRET && STRIPE_PRO_PRICE_ID);
+  }
   return !!(STRIPE_SECRET_KEY && STRIPE_WEBHOOK_SECRET && STRIPE_PRO_PRICE_ID);
+}
+
+/**
+ * Stripe API client using HYPR proxy
+ */
+class StripeProxyClient {
+  private proxy: HyprProxyClient;
+
+  constructor() {
+    this.proxy = getProxyClient();
+  }
+
+  /**
+   * Create a Stripe customer
+   */
+  async createCustomer(email: string, metadata: Record<string, string>): Promise<{ id: string }> {
+    const response = await this.proxy.stripe('/v1/customers', {
+      method: 'POST',
+      body: {
+        email,
+        metadata,
+      },
+    });
+
+    if (response.status !== 200 && response.status !== 201) {
+      const error = response.data as any;
+      throw new Error(error.error?.message || 'Failed to create customer');
+    }
+
+    return response.data as { id: string };
+  }
+
+  /**
+   * Create a checkout session
+   */
+  async createCheckoutSession(params: {
+    customer: string;
+    mode: 'subscription';
+    payment_method_types: string[];
+    line_items: Array<{ price: string; quantity: number }>;
+    success_url: string;
+    cancel_url: string;
+    metadata: Record<string, string>;
+    subscription_data?: { metadata: Record<string, string> };
+  }): Promise<{ id: string; url: string | null }> {
+    const response = await this.proxy.stripe('/v1/checkout/sessions', {
+      method: 'POST',
+      body: params,
+    });
+
+    if (response.status !== 200 && response.status !== 201) {
+      const error = response.data as any;
+      throw new Error(error.error?.message || 'Failed to create checkout session');
+    }
+
+    return response.data as { id: string; url: string | null };
+  }
+
+  /**
+   * Create a billing portal session
+   */
+  async createPortalSession(params: {
+    customer: string;
+    return_url: string;
+  }): Promise<{ url: string }> {
+    const response = await this.proxy.stripe('/v1/billing_portal/sessions', {
+      method: 'POST',
+      body: params,
+    });
+
+    if (response.status !== 200 && response.status !== 201) {
+      const error = response.data as any;
+      throw new Error(error.error?.message || 'Failed to create portal session');
+    }
+
+    return response.data as { url: string };
+  }
+
+  /**
+   * Retrieve a subscription
+   */
+  async retrieveSubscription(subscriptionId: string): Promise<any> {
+    const response = await this.proxy.stripe(`/v1/subscriptions/${subscriptionId}`, {
+      method: 'GET',
+    });
+
+    if (response.status !== 200) {
+      const error = response.data as any;
+      throw new Error(error.error?.message || 'Failed to retrieve subscription');
+    }
+
+    return response.data;
+  }
+
+  /**
+   * Update a subscription
+   */
+  async updateSubscription(subscriptionId: string, params: Record<string, any>): Promise<any> {
+    const response = await this.proxy.stripe(`/v1/subscriptions/${subscriptionId}`, {
+      method: 'POST',
+      body: params,
+    });
+
+    if (response.status !== 200) {
+      const error = response.data as any;
+      throw new Error(error.error?.message || 'Failed to update subscription');
+    }
+
+    return response.data;
+  }
+}
+
+// Singleton proxy client
+let stripeProxyClient: StripeProxyClient | null = null;
+
+/**
+ * Get Stripe proxy client instance
+ */
+function getStripeProxy(): StripeProxyClient {
+  if (!stripeProxyClient) {
+    stripeProxyClient = new StripeProxyClient();
+  }
+  return stripeProxyClient;
 }
 
 /**
  * Get or create a Stripe customer for a user
  */
 export async function getOrCreateCustomer(userId: string, email: string): Promise<string> {
-  const stripe = getStripe();
-  if (!stripe) {
-    throw new Error('Stripe is not configured');
-  }
-
   // Check if user already has a subscription record with Stripe customer ID
   const existingSubscription = await getSubscriptionByUserId(userId);
   
@@ -71,24 +204,36 @@ export async function getOrCreateCustomer(userId: string, email: string): Promis
   }
 
   // Create new customer in Stripe
-  const customer = await stripe.customers.create({
-    email,
-    metadata: {
-      userId,
-    },
-  });
+  let customer: { id: string };
+  
+  if (USE_HYPR_PROXY) {
+    // Use HYPR proxy
+    const proxy = getStripeProxy();
+    customer = await proxy.createCustomer(email, { userId });
+  } else {
+    // Use SDK directly (development mode)
+    const stripe = getStripe();
+    if (!stripe) {
+      throw new Error('Stripe is not configured');
+    }
+    customer = await stripe.customers.create({
+      email,
+      metadata: { userId },
+    });
+  }
 
   // Create subscription record (placeholder - no subscription yet)
   await createSubscription({
     userId,
-    stripeSubscriptionId: '', // Will be updated when subscription is created
+    stripeSubscriptionId: '',
     stripeCustomerId: customer.id,
     tier: 'hobby',
   });
 
   logger.info('Created Stripe customer', { 
     userId, 
-    customerId: customer.id 
+    customerId: customer.id,
+    viaProxy: USE_HYPR_PROXY
   });
 
   return customer.id;
@@ -103,11 +248,6 @@ export async function createCheckoutSession(
   successUrl: string,
   cancelUrl: string
 ): Promise<{ url: string; sessionId: string }> {
-  const stripe = getStripe();
-  if (!stripe) {
-    throw new Error('Stripe is not configured');
-  }
-
   if (!STRIPE_PRO_PRICE_ID) {
     throw new Error('Stripe Pro price ID is not configured');
   }
@@ -115,35 +255,76 @@ export async function createCheckoutSession(
   // Get or create Stripe customer
   const customerId = await getOrCreateCustomer(userId, email);
 
-  // Create checkout session
-  const session = await stripe.checkout.sessions.create({
-    customer: customerId,
-    mode: 'subscription',
-    payment_method_types: ['card'],
-    line_items: [
-      {
-        price: STRIPE_PRO_PRICE_ID,
-        quantity: 1,
-      },
-    ],
-    success_url: successUrl,
-    cancel_url: cancelUrl,
-    metadata: {
-      userId,
-      tier: 'pro',
-    },
-    subscription_data: {
+  let session: { id: string; url: string | null };
+
+  if (USE_HYPR_PROXY) {
+    // Use HYPR proxy
+    const proxy = getStripeProxy();
+    session = await proxy.createCheckoutSession({
+      customer: customerId,
+      mode: 'subscription',
+      payment_method_types: ['card'],
+      line_items: [
+        {
+          price: STRIPE_PRO_PRICE_ID,
+          quantity: 1,
+        },
+      ],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
       metadata: {
         userId,
         tier: 'pro',
       },
-    },
-  });
+      subscription_data: {
+        metadata: {
+          userId,
+          tier: 'pro',
+        },
+      },
+    });
+  } else {
+    // Use SDK directly (development mode)
+    const stripe = getStripe();
+    if (!stripe) {
+      throw new Error('Stripe is not configured');
+    }
+
+    const stripeSession = await stripe.checkout.sessions.create({
+      customer: customerId,
+      mode: 'subscription',
+      payment_method_types: ['card'],
+      line_items: [
+        {
+          price: STRIPE_PRO_PRICE_ID,
+          quantity: 1,
+        },
+      ],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      metadata: {
+        userId,
+        tier: 'pro',
+      },
+      subscription_data: {
+        metadata: {
+          userId,
+          tier: 'pro',
+        },
+      },
+    });
+
+    session = {
+      id: stripeSession.id,
+      url: stripeSession.url,
+    };
+  }
 
   logger.info('Created checkout session', { 
     userId, 
     sessionId: session.id,
-    customerId 
+    customerId,
+    viaProxy: USE_HYPR_PROXY
   });
 
   return {
@@ -159,11 +340,6 @@ export async function createPortalSession(
   userId: string,
   returnUrl: string
 ): Promise<string> {
-  const stripe = getStripe();
-  if (!stripe) {
-    throw new Error('Stripe is not configured');
-  }
-
   // Get customer ID from subscription record
   const subscription = await getSubscriptionByUserId(userId);
   
@@ -171,18 +347,37 @@ export async function createPortalSession(
     throw new Error('No Stripe customer found for user');
   }
 
-  // Create portal session
-  const session = await stripe.billingPortal.sessions.create({
-    customer: subscription.stripe_customer_id,
-    return_url: returnUrl,
-  });
+  let portalUrl: string;
+
+  if (USE_HYPR_PROXY) {
+    // Use HYPR proxy
+    const proxy = getStripeProxy();
+    const session = await proxy.createPortalSession({
+      customer: subscription.stripe_customer_id,
+      return_url: returnUrl,
+    });
+    portalUrl = session.url;
+  } else {
+    // Use SDK directly (development mode)
+    const stripe = getStripe();
+    if (!stripe) {
+      throw new Error('Stripe is not configured');
+    }
+
+    const session = await stripe.billingPortal.sessions.create({
+      customer: subscription.stripe_customer_id,
+      return_url: returnUrl,
+    });
+    portalUrl = session.url;
+  }
 
   logger.info('Created portal session', { 
     userId, 
-    customerId: subscription.stripe_customer_id 
+    customerId: subscription.stripe_customer_id,
+    viaProxy: USE_HYPR_PROXY
   });
 
-  return session.url;
+  return portalUrl;
 }
 
 /**
@@ -191,9 +386,6 @@ export async function createPortalSession(
 export async function handleCheckoutComplete(
   session: Stripe.Checkout.Session
 ): Promise<void> {
-  const stripe = getStripe();
-  if (!stripe) return;
-
   const userId = session.metadata?.userId;
   const tier = session.metadata?.tier as TierName;
 
@@ -206,14 +398,24 @@ export async function handleCheckoutComplete(
   const subscriptionId = session.subscription as string;
 
   // Get subscription details from Stripe
-  const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
-  const priceId = stripeSubscription.items.data[0]?.price.id;
+  let stripeSubscription: any;
+
+  if (USE_HYPR_PROXY) {
+    const proxy = getStripeProxy();
+    stripeSubscription = await proxy.retrieveSubscription(subscriptionId);
+  } else {
+    const stripe = getStripe();
+    if (!stripe) return;
+    stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
+  }
+
+  const priceId = stripeSubscription.items?.data?.[0]?.price?.id;
 
   // Get or create subscription record
   let subscription = await getSubscriptionByStripeCustomerId(customerId);
 
-  const periodStart = (stripeSubscription as any).current_period_start;
-  const periodEnd = (stripeSubscription as any).current_period_end;
+  const periodStart = stripeSubscription.current_period_start;
+  const periodEnd = stripeSubscription.current_period_end;
 
   if (!subscription) {
     subscription = await createSubscription({
@@ -287,7 +489,7 @@ async function handleSubscriptionUpdate(
 
   const userId = localSub.userId || localSub.user_id;
   const tier = (stripeSubscription.metadata?.tier as TierName) || 'pro';
-  const priceId = stripeSubscription.items.data[0]?.price.id;
+  const priceId = (stripeSubscription as any).items?.data?.[0]?.price?.id;
 
   // Use type assertion for Stripe subscription properties that may not be in the type
   const subData = stripeSubscription as any;
@@ -383,11 +585,6 @@ export async function handleCustomerSubscription(
  * Cancel a subscription (schedule cancellation at period end)
  */
 export async function cancelSubscriptionService(userId: string): Promise<void> {
-  const stripe = getStripe();
-  if (!stripe) {
-    throw new Error('Stripe is not configured');
-  }
-
   const subscription = await getSubscriptionByUserId(userId);
   
   if (!subscription?.stripe_subscription_id) {
@@ -395,9 +592,20 @@ export async function cancelSubscriptionService(userId: string): Promise<void> {
   }
 
   // Cancel at period end (don't immediately cancel)
-  await stripe.subscriptions.update(subscription.stripe_subscription_id, {
-    cancel_at_period_end: true,
-  });
+  if (USE_HYPR_PROXY) {
+    const proxy = getStripeProxy();
+    await proxy.updateSubscription(subscription.stripe_subscription_id, {
+      cancel_at_period_end: true,
+    });
+  } else {
+    const stripe = getStripe();
+    if (!stripe) {
+      throw new Error('Stripe is not configured');
+    }
+    await stripe.subscriptions.update(subscription.stripe_subscription_id, {
+      cancel_at_period_end: true,
+    });
+  }
 
   // Update local record
   await updateSubscription(subscription.id, {
@@ -406,7 +614,8 @@ export async function cancelSubscriptionService(userId: string): Promise<void> {
 
   logger.info('Subscription scheduled for cancellation', { 
     userId,
-    subscriptionId: subscription.stripe_subscription_id 
+    subscriptionId: subscription.stripe_subscription_id,
+    viaProxy: USE_HYPR_PROXY
   });
 }
 
@@ -417,11 +626,6 @@ export const cancelSubscription = cancelSubscriptionService;
  * Reactivate a subscription (undo cancellation)
  */
 export async function reactivateSubscription(userId: string): Promise<void> {
-  const stripe = getStripe();
-  if (!stripe) {
-    throw new Error('Stripe is not configured');
-  }
-
   const subscription = await getSubscriptionByUserId(userId);
   
   if (!subscription?.stripe_subscription_id) {
@@ -429,9 +633,20 @@ export async function reactivateSubscription(userId: string): Promise<void> {
   }
 
   // Remove cancellation schedule
-  await stripe.subscriptions.update(subscription.stripe_subscription_id, {
-    cancel_at_period_end: false,
-  });
+  if (USE_HYPR_PROXY) {
+    const proxy = getStripeProxy();
+    await proxy.updateSubscription(subscription.stripe_subscription_id, {
+      cancel_at_period_end: false,
+    });
+  } else {
+    const stripe = getStripe();
+    if (!stripe) {
+      throw new Error('Stripe is not configured');
+    }
+    await stripe.subscriptions.update(subscription.stripe_subscription_id, {
+      cancel_at_period_end: false,
+    });
+  }
 
   // Update local record
   await updateSubscription(subscription.id, {
@@ -440,7 +655,8 @@ export async function reactivateSubscription(userId: string): Promise<void> {
 
   logger.info('Subscription reactivated', { 
     userId,
-    subscriptionId: subscription.stripe_subscription_id 
+    subscriptionId: subscription.stripe_subscription_id,
+    viaProxy: USE_HYPR_PROXY
   });
 }
 
@@ -474,11 +690,15 @@ export async function getSubscriptionDetails(userId: string): Promise<{
 
 /**
  * Verify Stripe webhook signature
+ * 
+ * Note: This still uses the Stripe SDK directly because webhooks come from
+ * Stripe servers, not through our proxy. The webhook secret is set locally.
  */
 export function verifyWebhookSignature(
   payload: string | Buffer,
   signature: string
 ): Stripe.Event | null {
+  // Webhook verification must use SDK directly - webhooks come from Stripe
   const stripe = getStripe();
   if (!stripe || !STRIPE_WEBHOOK_SECRET) {
     logger.error('Stripe not configured for webhook verification');
