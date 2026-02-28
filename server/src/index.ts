@@ -5,15 +5,13 @@ import { Hono } from 'hono';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { MemoService } from './services/memo.js';
 import { initStorage } from './services/storage.js';
-import { authRoutes } from './routes/auth.js';
-import { adminRoutes } from './routes/admin.js';
 import { keysRoutes } from './routes/keys.js';
 import { audioRoutes } from './routes/audio.js';
 import { dashboardRoutes } from './routes/dashboard.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { billingRoutes } from './routes/billing.js';
 import { webhookRoutes } from './routes/webhooks.js';
-import { healthRoutes } from './routes/health.js';
+// Auth routes removed - HYPR will handle authentication
 import { requestLogger } from './middleware/requestLogger.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { 
@@ -32,7 +30,6 @@ import {
   InvalidApiKeyError,
   MissingApiKeyError
 } from './errors/index.js';
-import { getDb, closeDb, runMigrations, checkHealth } from './db/index.js';
 import {
   extractApiKey,
   validateApiKey,
@@ -40,8 +37,6 @@ import {
   isApiKeyFormat
 } from './services/apiKey.js';
 import { simpleRateLimit } from './middleware/rateLimit.js';
-import { findUserById } from './db/users.js';
-import { createMemo } from './db/memos.js';
 import { isCharacterCountAllowed, getTierCharLimit } from './config/tiers.js';
 import {
   logMemoCreated,
@@ -64,7 +59,7 @@ const app = new Hono<{ Bindings: Env }>();
 
 // Request logging middleware (first, to capture all requests)
 app.use('*', requestLogger({
-  skipPaths: ['/health', '/favicon.ico']
+  skipPaths: ['/favicon.ico']
 }));
 
 // Security headers middleware (CSP, XSS Protection, Frame Options, etc.)
@@ -104,11 +99,8 @@ function getBaseUrl(c: any): string {
   return c.env?.BASE_URL || process.env.BASE_URL || 'https://talk.onhyper.io';
 }
 
-// Auth routes
-app.route('/api/v1/auth', authRoutes);
-
-// Admin routes
-app.route('/api/v1/admin', adminRoutes);
+// Authentication routes removed - HYPR will handle auth
+// app.route('/api/v1/auth', authRoutes);
 
 // API key management routes (require session auth, not API key)
 app.route('/api/keys', keysRoutes);
@@ -127,9 +119,6 @@ app.route('/api/webhooks', webhookRoutes);
 
 // Audio file serving routes
 app.route('/audio', audioRoutes);
-
-// Health check routes
-app.route('/health', healthRoutes);
 
 // Metrics endpoint for monitoring
 app.get('/api/v1/metrics', async (c) => {
@@ -252,8 +241,9 @@ app.post('/api/v1/memo', async (c) => {
   }
 
   // Get user's tier for character limit check
-  const user = await findUserById(keyInfo.userId);
-  const userTier = user?.tier || 'hobby';
+  // TODO: HYPR Micro will provide user tier lookup
+  // For now, default to 'hobby' tier
+  const userTier = 'hobby';
   
   // Check character limit based on tier
   const charLimit = getTierCharLimit(userTier as 'hobby' | 'pro' | 'enterprise');
@@ -299,12 +289,9 @@ app.post('/api/v1/memo', async (c) => {
   }
 
   // Store memo in database
-  const memoRecord = await createMemo({
-    userId: keyInfo.userId,
-    audioUrl: memo.audio.url,
-    durationSec: memo.audio.duration,
-    title: undefined,
-  });
+  // TODO: HYPR Micro will handle memo storage
+  // For now, generate a placeholder ID
+  const memoId = `memo-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
   // Record API key usage (increment usage count)
   await recordKeyUsage(keyInfo.keyId);
@@ -318,7 +305,7 @@ app.post('/api/v1/memo', async (c) => {
 
   return c.json({
     ...memo,
-    id: memoRecord.id,
+    id: memoId,
   }, 201);
 });
 
@@ -343,7 +330,7 @@ app.get('*', async (c) => {
   const path = c.req.path;
   
   // Skip API and audio routes
-  if (path.startsWith('/api/') || path.startsWith('/audio/') || path.startsWith('/health')) {
+  if (path.startsWith('/api/') || path.startsWith('/audio/')) {
     return c.notFound();
   }
   
@@ -377,24 +364,9 @@ if (typeof process !== 'undefined' && import.meta.url === `file://${process.argv
   const { serve } = await import('@hono/node-server');
   const port = parseInt(process.env.PORT || '3001');
   
-  // Initialize database (async for HYPR Micro)
-  logger.info('Initializing database...');
-  await runMigrations();
-  
   // Initialize storage
   logger.info('Initializing storage...');
   initStorage();
-  
-  // Check database health
-  const health = await checkHealth();
-  logger.info(`Database ready: ${health.message} (${health.mode})`);
-  
-  // Seed development data if enabled
-  if (process.env.SEED_ON_START === 'true') {
-    const { seedDatabase } = await import('./db/seed.js');
-    logger.info('Seeding development data...');
-    await seedDatabase();
-  }
   
   serve({
     fetch: app.fetch,
@@ -403,17 +375,4 @@ if (typeof process !== 'undefined' && import.meta.url === `file://${process.argv
   
   logger.info(`🎙️  Agent Talk API running on http://localhost:${port}`);
   logger.info(`Mode: ${process.env.HYPR_MODE === 'production' ? 'HYPR Production' : 'Development'}`);
-  
-  // Graceful shutdown
-  process.on('SIGINT', () => {
-    logger.info('Shutting down...');
-    closeDb();
-    process.exit(0);
-  });
-  
-  process.on('SIGTERM', () => {
-    logger.info('Shutting down...');
-    closeDb();
-    process.exit(0);
-  });
 }

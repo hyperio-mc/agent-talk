@@ -1,123 +1,78 @@
 /**
- * Authentication Middleware
- * Validates JWT tokens and adds user context to requests
+ * Authentication Middleware - STUB
+ * 
+ * This is a placeholder until HYPR auth is integrated.
+ * All protected routes will fail with 503 Service Unavailable.
+ * 
+ * TODO: Replace with HYPR authentication when available.
  */
 
 import { Context, Next } from 'hono';
-import { verifyToken, extractBearerToken } from '../services/user.js';
-import { 
-  UnauthorizedError, 
-  MissingApiKeyError, 
-  InvalidApiKeyError 
-} from '../errors/index.js';
+import { NotImplementedError } from '../errors/index.js';
 
-// Extend Hono's context with user info
+// Auth context type (for future HYPR integration)
 export interface AuthContext {
   userId: string;
   email: string;
+  tier: string;
+  role: string;
 }
 
-// Add user to context variables
+// Extended user context with full user data
+export interface UserContext extends AuthContext {
+  user: unknown;
+}
+
+// Add user to Hono's context variables
 declare module 'hono' {
   interface ContextVariableMap {
     user: AuthContext;
+    fullUser: unknown;
   }
 }
 
 /**
- * Middleware to require authentication
- * Sets c.var.user if authenticated, throws 401 if not
+ * Require authentication middleware - STUB
+ * 
+ * Currently returns 503 until HYPR auth is integrated.
  */
 export async function requireAuth(c: Context, next: Next) {
-  // Try to get token from Authorization header
-  const authHeader = c.req.header('Authorization');
-  let token = extractBearerToken(authHeader);
-  
-  // Also check cookie as fallback
-  if (!token) {
-    const cookieHeader = c.req.header('Cookie');
-    if (cookieHeader) {
-      const cookies = parseCookies(cookieHeader);
-      token = cookies['auth_token'] || null;
-    }
-  }
-  
-  if (!token) {
-    throw new MissingApiKeyError();
-  }
-  
-  const payload = verifyToken(token);
-  
-  if (!payload) {
-    throw new InvalidApiKeyError();
-  }
-  
-  // Add user info to context
-  c.set('user', {
-    userId: payload.userId,
-    email: payload.email,
-  });
-  
-  await next();
+  throw new NotImplementedError('Authentication not configured. HYPR auth integration pending.');
 }
 
 /**
- * Optional authentication middleware
- * Sets c.var.user if authenticated, but doesn't require it
+ * Optional authentication middleware - STUB
+ * 
+ * Currently does nothing until HYPR auth is integrated.
  */
 export async function optionalAuth(c: Context, next: Next) {
-  // Try to get token from Authorization header
-  const authHeader = c.req.header('Authorization');
-  let token = extractBearerToken(authHeader);
-  
-  // Also check cookie as fallback
-  if (!token) {
-    const cookieHeader = c.req.header('Cookie');
-    if (cookieHeader) {
-      const cookies = parseCookies(cookieHeader);
-      token = cookies['auth_token'] || null;
-    }
-  }
-  
-  if (token) {
-    const payload = verifyToken(token);
-    
-    if (payload) {
-      c.set('user', {
-        userId: payload.userId,
-        email: payload.email,
-      });
-    }
-  }
-  
+  // No user context until HYPR auth
   await next();
 }
 
 /**
- * Get authenticated user from context
+ * Get authenticated user from context - STUB
  */
 export function getAuthUser(c: Context): AuthContext | null {
-  return c.get('user') || null;
+  return null;
 }
 
 /**
- * Parse cookies from header
+ * Get full user object from context - STUB
  */
-function parseCookies(cookieHeader: string): Record<string, string> {
-  const cookies: Record<string, string> = {};
-  
-  cookieHeader.split(';').forEach(cookie => {
-    const [name, ...valueParts] = cookie.trim().split('=');
-    if (name && valueParts.length > 0) {
-      cookies[name.trim()] = decodeURIComponent(valueParts.join('='));
-    }
-  });
-  
-  return cookies;
+export function getFullUser(c: Context): unknown {
+  return null;
 }
 
 /**
- * Create cookie options for auth token
+ * Require admin role middleware - STUB
+ */
+export async function requireAdmin(c: Context, next: Next) {
+  throw new NotImplementedError('Authentication not configured. HYPR auth integration pending.');
+}
+
+/**
+ * Cookie options for session cookies - STUB
  */
 export function getAuthCookieOptions(): {
   httpOnly: boolean;
@@ -129,15 +84,12 @@ export function getAuthCookieOptions(): {
   return {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    sameSite: 'lax',
     path: '/',
-    maxAge: 7 * 24 * 60 * 60, // 7 days in seconds
+    maxAge: 7 * 24 * 60 * 60,
   };
 }
 
-/**
- * Create clear cookie options for logout
- */
 export function getClearCookieOptions(): {
   httpOnly: boolean;
   secure: boolean;
@@ -148,8 +100,10 @@ export function getClearCookieOptions(): {
   return {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    sameSite: 'lax',
     path: '/',
     maxAge: 0,
   };
 }
+
+export const SESSION_COOKIE_NAME = 'auth_token';
