@@ -17,7 +17,7 @@ import {
   isCharacterCountAllowed,
   getTierCharLimit,
 } from '../config/tiers.js';
-import { findUserById } from '../db/users.js';
+import { findUserById } from '../db-stub/users.js';
 import {
   InsufficientTierError,
   ValidationError,

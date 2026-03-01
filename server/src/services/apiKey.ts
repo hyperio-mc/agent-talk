@@ -13,7 +13,7 @@ import {
   incrementKeyUsage,
   countApiKeysByUser,
   listApiKeysByUser,
-} from '../db/keys.js';
+} from '../db-stub/keys.js';
 import { InvalidApiKeyError, RevokedKeyError, ForbiddenError, NotFoundError } from '../errors/index.js';
 
 // Configuration

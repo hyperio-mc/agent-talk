@@ -6,7 +6,7 @@
  */
 
 import { getMicroClient } from '../lib/hypr-micro.js';
-import { isHyprMode } from '../db/index.js';
+import { isHyprMode, getDb } from '../db-stub/index.js';
 import { DailyLimitExceededError } from '../errors/index.js';
 import { TIER_LIMITS, TierName } from '../config/tiers.js';
 import { logger } from '../utils/logger.js';

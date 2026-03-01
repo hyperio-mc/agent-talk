@@ -10,6 +10,10 @@
   let demoError = null;
   let audioElement = null;
   
+  // Voice sample playback
+  let sampleAudioElement = null;
+  let currentlyPlayingVoice = null;
+  
   // Signup flow state
   let showSignupModal = false;
   let signupEmail = '';
@@ -109,6 +113,16 @@ return {
     ? 'http://localhost:3001' 
     : 'https://talk.onhyper.io';
 
+  // Get API base URL (uses relative path for same-origin, or env var for production)
+  const getApiBase = () => {
+    // In production, use the deployed URL
+    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
+      return window.ONHYPER?.apiBaseUrl || '';
+    }
+    // In development, use localhost
+    return 'http://localhost:3001';
+  };
+
   async function playDemo() {
     isLoading = true;
     demoError = null;
@@ -120,10 +134,13 @@ return {
     }
     
     try {
-      // Use demo endpoint (no API key required)
-      const response = await fetch(`${API_BASE}/api/v1/demo`, {
+      // Use local API for TTS demo
+      const apiBase = getApiBase();
+      const response = await fetch(`${apiBase}/api/v1/demo`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json'
+        },
         body: JSON.stringify({
           text: demoText,
           voice: voice
@@ -132,11 +149,18 @@ return {
       
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
-        throw new Error(error.message || `API error: ${response.status}`);
+        throw new Error(error.error || error.message || `API error: ${response.status}`);
       }
       
-      const memo = await response.json();
-      demoAudioUrl = memo.audio.url;
+      const data = await response.json();
+      // Response should have audio URL
+      if (data.audio?.url) {
+        demoAudioUrl = data.audio.url;
+      } else if (data.audio_url) {
+        demoAudioUrl = data.audio_url;
+      } else {
+        throw new Error('No audio in response');
+      }
       
       // Play audio
       audioElement = new Audio(demoAudioUrl);
@@ -249,6 +273,48 @@ return {
     openFaq = openFaq === index ? null : index;
   }
   
+  // Play pre-generated voice sample
+  function playVoiceSample(voiceId) {
+    // Stop any currently playing audio
+    if (sampleAudioElement) {
+      sampleAudioElement.pause();
+      sampleAudioElement = null;
+    }
+    if (audioElement) {
+      audioElement.pause();
+      audioElement = null;
+      isPlaying = false;
+    }
+    
+    // If same voice was playing, stop it
+    if (currentlyPlayingVoice === voiceId) {
+      currentlyPlayingVoice = null;
+      return;
+    }
+    
+    // Play the sample
+    const samplePath = `/samples/${voiceId}.mp3`;
+    sampleAudioElement = new Audio(samplePath);
+    
+    sampleAudioElement.onended = () => {
+      currentlyPlayingVoice = null;
+    };
+    
+    sampleAudioElement.onerror = () => {
+      console.error('Failed to load sample:', samplePath);
+      // Fallback: scroll to demo section
+      document.getElementById('demo')?.scrollIntoView({ behavior: 'smooth' });
+      currentlyPlayingVoice = null;
+    };
+    
+    sampleAudioElement.play().catch(err => {
+      console.error('Failed to play sample:', err);
+      currentlyPlayingVoice = null;
+    });
+    
+    currentlyPlayingVoice = voiceId;
+  }
+  
   // Cleanup audio on destroy
   import { onMount, onDestroy } from 'svelte';
   onMount(() => {
@@ -258,6 +324,10 @@ return {
     if (audioElement) {
       audioElement.pause();
       audioElement = null;
+    }
+    if (sampleAudioElement) {
+      sampleAudioElement.pause();
+      sampleAudioElement = null;
     }
   });
 </script>
@@ -425,8 +495,8 @@ return {
             <h4>{v.name}</h4>
             <p>{v.description}</p>
           </div>
-          <button class="btn-voice-sample" on:click={() => { voice = v.id; demoText = `Hi, I'm ${v.name}. ${v.description} voice, perfect for your AI assistant.`; document.getElementById('demo').scrollIntoView({ behavior: 'smooth' }); }}>
-            ▶ Sample
+          <button class="btn-voice-sample" on:click={() => playVoiceSample(v.id)}>
+            {currentlyPlayingVoice === v.id ? '⏹️ Stop' : '▶ Sample'}
           </button>
         </div>
       {/each}

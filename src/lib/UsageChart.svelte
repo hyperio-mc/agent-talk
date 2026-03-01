@@ -7,7 +7,7 @@
     generateYTicks,
     defaultChartConfig,
     calculateStats
-  } from './charts.js';
+  } from './charts';
   
   export let data = [];
   export let days = 7;

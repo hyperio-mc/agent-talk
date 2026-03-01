@@ -50,3 +50,22 @@ export type {
   StorageFile, 
   StorageListOptions 
 } from './hypr-storage.js';
+
+// Micro tables (typed database helpers)
+export {
+  TABLES,
+  isHyprMode,
+  initMicroTables,
+  Users,
+  ApiKeys,
+  Memos,
+  UsageLogs,
+  Subscriptions,
+} from './micro-tables.js';
+export type {
+  User as MicroUser,
+  ApiKey as MicroApiKey,
+  Memo as MicroMemo,
+  UsageLog as MicroUsageLog,
+  Subscription as MicroSubscription,
+} from './micro-tables.js';

@@ -135,6 +135,15 @@ app.get('/api/v1/voices', (c) => {
   });
 });
 
+// Health check endpoint
+app.get('/health', (c) => {
+  return c.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    version: process.env.npm_package_version || '1.0.0'
+  });
+});
+
 // Public demo endpoint (no API key required - uses simulation mode)
 // Demo has a smaller character limit for abuse prevention
 const DEMO_MAX_CHARS = 1000;

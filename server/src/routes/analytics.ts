@@ -13,7 +13,7 @@ import {
   getErrorStats,
   getDashboardSummary 
 } from '../services/analytics.js';
-import { getMemoCountsByDay, listMemosByUser } from '../db/memos.js';
+import { getMemoCountsByDay, listMemosByUser } from '../db-stub/memos.js';
 import { UnauthorizedError } from '../errors/index.js';
 
 export const analyticsRoutes = new Hono();
@@ -173,7 +173,7 @@ analyticsRoutes.get('/export', requireAuth, async (c) => {
   const memosCsv = [
     'ID,Date,Voice,Character Count,Duration (seconds),Audio URL',
     ...memos.map(m => 
-      `"${m.id}","${m.created_at}","${m.voice || ''}",${m.character_count || 0},${m.duration_sec || 0},"${m.audio_url || ''}"`
+      `"${m.id}","${m.created_at}","${m.voice || ''}",${m.character_count || 0},${m.duration_seconds || 0},"${m.audio_url || ''}"`
     )
   ].join('\n');
   

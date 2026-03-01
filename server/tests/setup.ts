@@ -57,7 +57,7 @@ function resetAllStores() {
 }
 
 // Mock users database
-vi.mock('../src/db/users.js', () => ({
+vi.mock('../src/db-stub/users.js', () => ({
   findUserById: vi.fn(async (id: string) => memoryUsers.get(id) || null),
   
   findUserByEmail: vi.fn(async (email: string) => {
@@ -169,7 +169,7 @@ vi.mock('../src/db/users.js', () => ({
 }));
 
 // Mock API keys database
-vi.mock('../src/db/keys.js', () => ({
+vi.mock('../src/db-stub/keys.js', () => ({
   createApiKeyRecord: vi.fn(async (data: { userId: string; keyHash: string; prefix: string; name: string }) => {
     const id = generateKeyId();
     const now = new Date().toISOString();
@@ -267,14 +267,14 @@ vi.mock('../src/db/keys.js', () => ({
 }));
 
 // Mock memos database
-vi.mock('../src/db/memos.js', () => ({
-  createMemo: vi.fn(async (data: { userId: string; audioUrl: string; durationSec?: number; title?: string }) => {
+vi.mock('../src/db-stub/memos.js', () => ({
+  createMemo: vi.fn(async (data: { userId: string; audioUrl: string; durationSeconds?: number; title?: string }) => {
     const id = generateMemoId();
     const memo = {
       id,
       user_id: data.userId,
       audio_url: data.audioUrl,
-      duration_seconds: data.durationSec || 0,
+      duration_seconds: data.durationSeconds || 0,
       title: data.title || null,
       created_at: new Date().toISOString(),
     };
@@ -299,15 +299,16 @@ vi.mock('../src/db/memos.js', () => ({
   }),
 }));
 
-// Mock db/index.js module
-vi.mock('../src/db/index.js', () => ({
+// Mock db-stub/index.js module
+vi.mock('../src/db-stub/index.js', () => ({
   getDb: vi.fn(() => null),
   closeDb: vi.fn(() => {}),
   runMigrations: vi.fn(async () => {}),
-  initDatabases: vi.fn(async () => {}),
+  initDb: vi.fn(async () => {}),
   checkHealth: vi.fn(async () => ({ status: 'ok', message: 'Test database', mode: 'memory' })),
   isHyprMode: vi.fn(() => false),
-  DB_NAMES: {
+  isHyprMicroMode: vi.fn(() => false),
+  TABLES: {
     USERS: 'users',
     API_KEYS: 'api_keys',
     MEMOS: 'memos',
@@ -347,6 +348,58 @@ vi.mock('../src/lib/hypr-micro.js', () => ({
     async list() { throw new Error('Not implemented'); }
     async createDatabase() { throw new Error('Not implemented'); }
     async listDatabases() { return []; }
+  },
+}));
+
+// Mock micro-tables module
+vi.mock('../src/lib/micro-tables.js', () => ({
+  isHyprMode: vi.fn(() => false),
+  initMicroTables: vi.fn(async () => {}),
+  TABLES: {
+    USERS: 'users',
+    API_KEYS: 'api_keys',
+    MEMOS: 'memos',
+    USAGE_LOGS: 'usage_logs',
+    SUBSCRIPTIONS: 'subscriptions',
+  },
+  Users: {
+    create: vi.fn(),
+    findById: vi.fn(),
+    findByEmail: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+    list: vi.fn(),
+  },
+  ApiKeys: {
+    create: vi.fn(),
+    findById: vi.fn(),
+    findByKeyHash: vi.fn(),
+    findByUserId: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+    countByUser: vi.fn(),
+  },
+  Memos: {
+    create: vi.fn(),
+    findById: vi.fn(),
+    findByUserId: vi.fn(),
+    countByUser: vi.fn(),
+    delete: vi.fn(),
+  },
+  UsageLogs: {
+    create: vi.fn(),
+    findByUserId: vi.fn(),
+    findByAction: vi.fn(),
+    count: vi.fn(),
+  },
+  Subscriptions: {
+    create: vi.fn(),
+    findById: vi.fn(),
+    findByUserId: vi.fn(),
+    findByStripeCustomerId: vi.fn(),
+    findByStripeSubscriptionId: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
   },
 }));
 
@@ -454,7 +507,7 @@ export async function appRequest(
 // Test helpers
 export async function createTestUser(email: string = 'test@example.com', password: string = 'testpassword123') {
   const bcrypt = await import('bcrypt');
-  const { createUser } = await import('../src/db/users.js');
+  const { createUser } = await import('../src/db-stub/users.js');
   
   const passwordHash = await bcrypt.hash(password, 12);
   return createUser({
@@ -467,7 +520,7 @@ export async function createTestUser(email: string = 'test@example.com', passwor
 
 export async function createTestApiKey(userId: string, name: string = 'Test Key') {
   const { hashApiKey, generateApiKey } = await import('../src/services/apiKey.js');
-  const { createApiKeyRecord } = await import('../src/db/keys.js');
+  const { createApiKeyRecord } = await import('../src/db-stub/keys.js');
   
   const { fullKey, prefix } = generateApiKey(false);
   const keyHash = hashApiKey(fullKey);

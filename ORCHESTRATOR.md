@@ -32,22 +32,18 @@ For each ready task, use `sessions_spawn` with mode="run":
 }
 ```
 
-## Current Ready Tasks (No Dependencies)
+## Current Status (Updated 2026-02-28)
 
-These can be started immediately:
-- **task-137** (Database) - HIGH - File: `tasks/todos/task-137-agent-talk-database.md`
-- **task-134** (Auth) - HIGH - File: `tasks/todos/task-134-agent-talk-auth.md`
-- **task-150** (Error Handling) - MEDIUM - File: `tasks/todos/task-150-agent-talk-error-handling.md`
+**All Wave 1-4 tasks are COMPLETE.** See `tasks/done/` for completed work.
 
-## Dependency Chain
+**Deferred Work (needs new tasks):**
+- Phase 5: Auth integration (WorkOS or HYPR native auth)
+- Phase 6: Billing integration (Stripe via HYPR)
 
-```
-Wave 1 (no deps): task-137, task-134, task-150
-Wave 2: task-135 (needs 134), task-151 (needs 134+135)
-Wave 3: task-136 (needs 135), task-139 (needs 135), task-140 (needs 134+135), task-143 (needs 135), task-146 (needs 135)
-Wave 4: task-138 (needs 136), task-141 (needs 139), task-145 (needs 134+135+136+137)
-... and so on
-```
+**To create new tasks:**
+1. Define task files in `tasks/todos/`
+2. Update this file with new dependency chain
+3. Re-run orchestrator
 
 ## Step 4: Report
 

@@ -3,7 +3,7 @@ id: task-149
 created: 2026-02-27
 priority: high
 assignee: agent
-status: in-progress
+status: done
 project: agent-talk
 ---
 

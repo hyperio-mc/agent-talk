@@ -512,8 +512,8 @@ describe('Auth Endpoints', () => {
         }),
       });
 
-      // Error handling returns 500 for password errors currently
-      expect(response.status).toBe(500);
+      // Should return 401 for wrong password
+      expect(response.status).toBe(401);
     });
 
     it('should reject without authentication', async () => {
@@ -543,7 +543,7 @@ describe('Auth Endpoints', () => {
       });
 
       const body = await response.json();
-      expect(response.status).toBe(500);
+      expect(response.status).toBe(400);
       expect(body.error.message).toContain('8 characters');
     });
   });

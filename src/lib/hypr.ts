@@ -349,17 +349,42 @@ export async function proxyElevenLabsTTS(
 }
 
 // ============================================================================
-// Auth Helpers (Future)
+// Auth Helpers
 // ============================================================================
 
 /**
- * Get current user from HYPR Auth
- * Placeholder for future WorkOS/HYPR auth integration
+ * Auth user type
  */
-export async function getCurrentUser(): Promise<{ id: string; email: string } | null> {
-  const response = await fetch(`${config.apiBaseUrl}/api/hypr/auth/me`, {
+export interface AuthUser {
+  id: string;
+  email: string;
+  tier: string;
+  role: string;
+  createdAt?: string;
+}
+
+/**
+ * Auth response type
+ */
+export interface AuthResponse {
+  success: boolean;
+  user: AuthUser;
+  token: string;
+  expiresAt: string;
+  apiKey?: {
+    key: string;
+    prefix: string;
+  };
+}
+
+/**
+ * Get current user from session
+ */
+export async function getCurrentUser(): Promise<AuthUser | null> {
+  const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/me`, {
+    credentials: 'include', // Include cookies
     headers: {
-      'X-App-Slug': config.appSlug
+      'Content-Type': 'application/json'
     }
   });
   
@@ -371,23 +396,134 @@ export async function getCurrentUser(): Promise<{ id: string; email: string } | 
     throw new Error(`Auth check failed: ${response.status}`);
   }
   
+  const data = await response.json();
+  return data.user;
+}
+
+/**
+ * Sign up a new user
+ */
+export async function signUp(email: string, password: string): Promise<AuthResponse> {
+  const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/signup`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ email, password })
+  });
+  
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error?.message || 'Sign up failed');
+  }
+  
   return response.json();
 }
 
 /**
- * Initiate HYPR Auth login flow
+ * Log in an existing user
+ */
+export async function logIn(email: string, password: string): Promise<AuthResponse> {
+  const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/login`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ email, password })
+  });
+  
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error?.message || 'Login failed');
+  }
+  
+  return response.json();
+}
+
+/**
+ * Log out the current user
+ */
+export async function logOut(): Promise<void> {
+  const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/logout`, {
+    method: 'POST',
+    credentials: 'include'
+  });
+  
+  if (!response.ok) {
+    throw new Error('Logout failed');
+  }
+}
+
+/**
+ * Request password reset
+ */
+export async function requestPasswordReset(email: string): Promise<void> {
+  const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/forgot-password`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ email })
+  });
+  
+  if (!response.ok) {
+    throw new Error('Password reset request failed');
+  }
+}
+
+/**
+ * Reset password with token
+ */
+export async function resetPassword(token: string, newPassword: string): Promise<void> {
+  const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/reset-password`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ token, newPassword })
+  });
+  
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error?.message || 'Password reset failed');
+  }
+}
+
+/**
+ * Change password (requires current session)
+ */
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/change-password`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ currentPassword, newPassword })
+  });
+  
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error?.message || 'Password change failed');
+  }
+}
+
+/**
+ * Get login URL (for external auth flow, if needed)
  */
 export function getLoginUrl(returnTo?: string): string {
   const params = new URLSearchParams();
   if (returnTo) params.set('return_to', returnTo);
-  return `${config.apiBaseUrl}/api/hypr/auth/login?${params}`;
+  return `${config.apiBaseUrl}/login.html${params.toString() ? '?' + params : ''}`;
 }
 
 /**
- * Initiate logout
+ * Get logout URL
  */
 export function getLogoutUrl(): string {
-  return `${config.apiBaseUrl}/api/hypr/auth/logout`;
+  return `${config.apiBaseUrl}/api/v1/auth/logout`;
 }
 
 // ============================================================================
@@ -416,8 +552,17 @@ const Hypr = {
   
   // Auth
   user: getCurrentUser,
+  signUp,
+  logIn,
+  logOut,
+  changePassword,
+  requestPasswordReset,
+  resetPassword,
   loginUrl: getLoginUrl,
   logoutUrl: getLogoutUrl
 };
 
 export default Hypr;
+
+// Re-export auth types
+export type { AuthUser, AuthResponse };
