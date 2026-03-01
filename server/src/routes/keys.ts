@@ -238,7 +238,7 @@ keysRoutes.patch('/:id', requireAuth, async (c) => {
   }
   
   // Import update function
-  const { updateApiKey } = await import('../db-stub/keys.js');
+  const { updateApiKey } = await import('../db/keys.js');
   const updated = await updateApiKey(keyId, { name });
   
   if (!updated || updated.user_id !== authUser.userId) {

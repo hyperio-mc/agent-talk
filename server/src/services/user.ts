@@ -14,7 +14,7 @@ import {
   setPasswordResetToken,
   resetPassword,
   verifyEmail,
-} from '../db-stub/users.js';
+} from '../db/users.js';
 import {
   ValidationError,
   UnauthorizedError,

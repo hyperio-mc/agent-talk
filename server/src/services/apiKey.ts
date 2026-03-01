@@ -8,12 +8,12 @@ import {
   getApiKeyByKey,
   findApiKeyByIdAsync,
   getApiKeysByUserId,
-  revokeApiKey as revokeApiKeyDb,
-  deleteApiKey as deleteApiKeyDb,
+  revokeApiKeyById as revokeApiKeyDb,
+  deleteApiKeyById as deleteApiKeyDb,
   incrementKeyUsage,
   countApiKeysByUser,
   listApiKeysByUser,
-} from '../db-stub/keys.js';
+} from '../db/keys.js';
 import { InvalidApiKeyError, RevokedKeyError, ForbiddenError, NotFoundError } from '../errors/index.js';
 
 // Configuration

@@ -6,7 +6,7 @@
 import { Context, Next } from 'hono';
 import { getAuthUser } from './auth.js';
 import { ForbiddenError, UnauthorizedError } from '../errors/index.js';
-import { findUserById } from '../db-stub/users.js';
+import { findUserById } from '../db/users.js';
 
 /**
  * Middleware to require admin role

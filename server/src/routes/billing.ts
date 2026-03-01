@@ -15,7 +15,7 @@ import {
   getTierConfig,
   compareTiers,
 } from '../config/tiers.js';
-import { findUserById, updateUserTier } from '../db-stub/users.js';
+import { findUserById, updateUserTier } from '../db/users.js';
 import {
   ValidationError,
   UnauthorizedError,

@@ -22,14 +22,14 @@ import {
 import { getRateLimitStatus } from '../middleware/rateLimit.js';
 import { 
   findUserById, 
-} from '../db-stub/users.js';
+} from '../db/users.js';
 import { 
   getApiKeysByUserId,
   countApiKeysByUser,
-} from '../db-stub/keys.js';
+} from '../db/keys.js';
 import { 
   countMemosByUserId, 
-} from '../db-stub/memos.js';
+} from '../db/memos.js';
 
 export const dashboardRoutes = new Hono();
 

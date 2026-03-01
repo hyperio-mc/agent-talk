@@ -12,3 +12,7 @@ restartPolicyMaxRetries = 3
 [environments.production]
 # Production-specific settings
 NODE_ENV = "production"
+
+# Persistent volume for SQLite database
+[environments.production.volume]
+  mountPath = "/app/data"

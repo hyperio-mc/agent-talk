@@ -13,11 +13,11 @@ import {
   getUsageLogsByAction,
   countTotalUsageLogs,
   UsageLog,
-} from '../db-stub/usage_logs.js';
+} from '../db/usage_logs.js';
 import {
   listMemosByUser,
   countMemosByUserId,
-} from '../db-stub/memos.js';
+} from '../db/memos.js';
 
 // Event types for analytics
 export type AnalyticsEventType = 

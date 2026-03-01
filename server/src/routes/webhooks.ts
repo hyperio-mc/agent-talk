@@ -16,11 +16,11 @@ import {
   handleCustomerSubscription 
 } from '../services/stripe.js';
 import { logger } from '../utils/logger.js';
-import { updateUserTier } from '../db-stub/users.js';
+import { updateUserTier } from '../db/users.js';
 import { 
   getSubscriptionByStripeCustomerId, 
   updateSubscription 
-} from '../db-stub/subscriptions.js';
+} from '../db/subscriptions.js';
 
 export const webhookRoutes = new Hono();
 

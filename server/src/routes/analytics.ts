@@ -13,7 +13,7 @@ import {
   getErrorStats,
   getDashboardSummary 
 } from '../services/analytics.js';
-import { getMemoCountsByDay, listMemosByUser } from '../db-stub/memos.js';
+import { getMemoCountsByDay, listMemosByUser } from '../db/memos.js';
 import { UnauthorizedError } from '../errors/index.js';
 
 export const analyticsRoutes = new Hono();

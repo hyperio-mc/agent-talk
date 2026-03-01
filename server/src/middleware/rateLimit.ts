@@ -16,7 +16,7 @@ import {
   Tier 
 } from '../services/rateLimit.js';
 import { DailyLimitExceededError } from '../errors/index.js';
-import { findUserById } from '../db-stub/users.js';
+import { findUserById } from '../db/users.js';
 import { isAdmin } from './admin.js';
 
 // Extend Hono's context with rate limit info

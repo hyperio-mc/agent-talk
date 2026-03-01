@@ -11,7 +11,7 @@ import Stripe from 'stripe';
 import { 
   findUserById, 
   updateUserTier 
-} from '../db-stub/users.js';
+} from '../db/users.js';
 import {
   createSubscription,
   getSubscriptionByUserId,
@@ -20,7 +20,7 @@ import {
   updateSubscription,
   SubscriptionTier,
   SubscriptionStatus,
-} from '../db-stub/subscriptions.js';
+} from '../db/subscriptions.js';
 import { TIERS, TierName } from '../config/tiers.js';
 import { logger } from '../utils/logger.js';
 import { getProxyClient, HyprProxyClient } from '../lib/hypr-proxy.js';
@@ -680,7 +680,7 @@ export async function getSubscriptionDetails(userId: string): Promise<{
   return {
     hasSubscription: !!subscription?.stripe_subscription_id,
     tier: user.tier as TierName,
-    status: subscription?.status || null,
+    status: (subscription?.status as any) || null,
     stripeCustomerId: subscription?.stripe_customer_id || null,
     stripeSubscriptionId: subscription?.stripe_subscription_id || null,
     currentPeriodEnd: subscription?.current_period_end || null,
