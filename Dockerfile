@@ -27,6 +27,9 @@ RUN npm run build
 # Stage 2: Build the server
 FROM node:20-alpine AS server-builder
 
+# Install build tools for native modules (better-sqlite3)
+RUN apk add --no-cache python3 make g++ sqlite-dev
+
 WORKDIR /app/server
 
 # Copy server package files
@@ -51,9 +54,15 @@ WORKDIR /app
 # Install SQLite tools for database operations
 RUN apk add --no-cache sqlite
 
+# Install build tools for native modules (needed for better-sqlite3)
+RUN apk add --no-cache python3 make g++ sqlite-dev
+
 # Copy server package files and install production dependencies only
 COPY server/package*.json ./
 RUN npm ci --only=production
+
+# Rebuild native modules for Alpine Linux
+RUN npm rebuild better-sqlite3
 
 # Copy built server
 COPY --from=server-builder /app/server/dist ./dist
