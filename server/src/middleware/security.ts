@@ -63,12 +63,18 @@ export interface HstsOptions {
 
 /**
  * Default CSP directives for API
+ * Allows serving static frontend assets
  */
 const DEFAULT_CSP: CspDirectives = {
-  'default-src': ["'none'"],
+  'default-src': ["'self'"],
+  'script-src': ["'self'", "'unsafe-inline'"],
+  'style-src': ["'self'", "'unsafe-inline'"],
+  'img-src': ["'self'", "data:", "https:"],
+  'font-src': ["'self'", "data:"],
+  'connect-src': ["'self'", "https:"],
   'frame-ancestors': ["'none'"],
-  'form-action': ["'none'"],
-  'base-uri': ["'none'"],
+  'form-action': ["'self'"],
+  'base-uri': ["'self'"],
   'object-src': ["'none'"],
 };
 
