@@ -32,18 +32,22 @@ For each ready task, use `sessions_spawn` with mode="run":
 }
 ```
 
-## Current Status (Updated 2026-02-28)
+## Current Status (Updated 2026-03-08)
 
-**All Wave 1-4 tasks are COMPLETE.** See `tasks/done/` for completed work.
+**All Waves 1-6 are COMPLETE.** See `tasks/done/` for completed work.
 
-**Deferred Work (needs new tasks):**
-- Phase 5: Auth integration (WorkOS or HYPR native auth)
-- Phase 6: Billing integration (Stripe via HYPR)
+**Recent Fixes (2026-03-08):**
+- Fixed test mock paths (db vs db-stub mismatch)
+- Restored auth middleware from _archived (was stub returning 501)
+- Restored auth routes from _archived  
+- Fixed async/await for createNewApiKey in auth routes
+- Fixed error classes in user service (ValidationError, UnauthorizedError)
+- All 138 tests now passing
 
-**To create new tasks:**
-1. Define task files in `tasks/todos/`
-2. Update this file with new dependency chain
-3. Re-run orchestrator
+**Project Ready For:**
+- Deployment to HYPR platform (app slug: `talk`)
+- Configure secrets in HYPR dashboard (ELEVENLABS_API_KEY, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET)
+- Test production deployment
 
 ## Step 4: Report
 

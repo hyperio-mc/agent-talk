@@ -4,7 +4,7 @@
  * Provides in-memory implementations for tests with proper async support.
  */
 
-import { beforeAll, beforeEach, afterAll, vi, expect } from 'vitest';
+import { beforeAll, beforeEach, afterEach, afterAll, vi, expect } from 'vitest';
 import { Hono } from 'hono';
 
 // Test assertion helpers for Hono responses
@@ -56,8 +56,8 @@ function resetAllStores() {
   memoryMemos.clear();
 }
 
-// Mock users database
-vi.mock('../src/db-stub/users.js', () => ({
+// Mock users database - using actual db path (not db-stub)
+vi.mock('../src/db/users.js', () => ({
   findUserById: vi.fn(async (id: string) => memoryUsers.get(id) || null),
   
   findUserByEmail: vi.fn(async (email: string) => {
@@ -168,8 +168,8 @@ vi.mock('../src/db-stub/users.js', () => ({
   },
 }));
 
-// Mock API keys database
-vi.mock('../src/db-stub/keys.js', () => ({
+// Mock API keys database - using actual db path (not db-stub)
+vi.mock('../src/db/keys.js', () => ({
   createApiKeyRecord: vi.fn(async (data: { userId: string; keyHash: string; prefix: string; name: string }) => {
     const id = generateKeyId();
     const now = new Date().toISOString();
@@ -250,11 +250,30 @@ vi.mock('../src/db-stub/keys.js', () => ({
   
   findApiKeyById: vi.fn((id: string) => memoryKeys.get(id) || null),
   
-  updateApiKey: vi.fn(async (id: string, updates: { name?: string }) => {
+  revokeApiKeyById: vi.fn(async (id: string) => {
+    const key = memoryKeys.get(id);
+    if (!key) return false;
+    key.is_active = false;
+    memoryKeys.set(id, key);
+    return true;
+  }),
+  
+  deleteApiKeyById: vi.fn(async (id: string) => {
+    const key = memoryKeys.get(id);
+    if (key) {
+      hashIndex.delete(key.key_hash);
+    }
+    return memoryKeys.delete(id);
+  }),
+  
+  updateApiKey: vi.fn(async (id: string, updates: { name?: string; is_active?: boolean }) => {
     const key = memoryKeys.get(id);
     if (!key) return null;
     if (updates.name !== undefined) {
       key.name = updates.name;
+    }
+    if (updates.is_active !== undefined) {
+      key.is_active = updates.is_active;
     }
     memoryKeys.set(id, key);
     return key;
@@ -266,8 +285,8 @@ vi.mock('../src/db-stub/keys.js', () => ({
   },
 }));
 
-// Mock memos database
-vi.mock('../src/db-stub/memos.js', () => ({
+// Mock memos database - using actual db path (not db-stub)
+vi.mock('../src/db/memos.js', () => ({
   createMemo: vi.fn(async (data: { userId: string; audioUrl: string; durationSeconds?: number; title?: string }) => {
     const id = generateMemoId();
     const memo = {
@@ -299,8 +318,8 @@ vi.mock('../src/db-stub/memos.js', () => ({
   }),
 }));
 
-// Mock db-stub/index.js module
-vi.mock('../src/db-stub/index.js', () => ({
+// Mock db/index.js module
+vi.mock('../src/db/index.js', () => ({
   getDb: vi.fn(() => null),
   closeDb: vi.fn(() => {}),
   runMigrations: vi.fn(async () => {}),
@@ -507,7 +526,7 @@ export async function appRequest(
 // Test helpers
 export async function createTestUser(email: string = 'test@example.com', password: string = 'testpassword123') {
   const bcrypt = await import('bcrypt');
-  const { createUser } = await import('../src/db-stub/users.js');
+  const { createUser } = await import('../src/db/users.js');
   
   const passwordHash = await bcrypt.hash(password, 12);
   return createUser({
@@ -520,7 +539,7 @@ export async function createTestUser(email: string = 'test@example.com', passwor
 
 export async function createTestApiKey(userId: string, name: string = 'Test Key') {
   const { hashApiKey, generateApiKey } = await import('../src/services/apiKey.js');
-  const { createApiKeyRecord } = await import('../src/db-stub/keys.js');
+  const { createApiKeyRecord } = await import('../src/db/keys.js');
   
   const { fullKey, prefix } = generateApiKey(false);
   const keyHash = hashApiKey(fullKey);

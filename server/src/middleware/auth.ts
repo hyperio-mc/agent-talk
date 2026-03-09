@@ -1,78 +1,172 @@
 /**
- * Authentication Middleware - STUB
- * 
- * This is a placeholder until HYPR auth is integrated.
- * All protected routes will fail with 503 Service Unavailable.
- * 
- * TODO: Replace with HYPR authentication when available.
+ * Authentication Middleware
+ * Validates JWT tokens and adds user context to requests
  */
 
 import { Context, Next } from 'hono';
-import { NotImplementedError } from '../errors/index.js';
+import { verifyToken, extractBearerToken } from '../services/user.js';
+import { 
+  UnauthorizedError,
+} from '../errors/index.js';
+import { findUserById, User } from '../db/users.js';
 
-// Auth context type (for future HYPR integration)
+// Extend Hono's context with user info
 export interface AuthContext {
   userId: string;
   email: string;
-  tier: string;
-  role: string;
+  tier?: string;
+  role?: string;
 }
 
 // Extended user context with full user data
 export interface UserContext extends AuthContext {
-  user: unknown;
+  user: User;
 }
 
-// Add user to Hono's context variables
+// Add user to context variables
 declare module 'hono' {
   interface ContextVariableMap {
     user: AuthContext;
-    fullUser: unknown;
+    fullUser: User;
   }
 }
 
 /**
- * Require authentication middleware - STUB
- * 
- * Currently returns 503 until HYPR auth is integrated.
+ * Middleware to require authentication
+ * Sets c.var.user if authenticated, throws 401 if not
  */
 export async function requireAuth(c: Context, next: Next) {
-  throw new NotImplementedError('Authentication not configured. HYPR auth integration pending.');
-}
-
-/**
- * Optional authentication middleware - STUB
- * 
- * Currently does nothing until HYPR auth is integrated.
- */
-export async function optionalAuth(c: Context, next: Next) {
-  // No user context until HYPR auth
+  // Try to get token from Authorization header
+  const authHeader = c.req.header('Authorization');
+  let token = extractBearerToken(authHeader);
+  
+  // Also check cookie as fallback
+  if (!token) {
+    const cookieHeader = c.req.header('Cookie');
+    if (cookieHeader) {
+      const cookies = parseCookies(cookieHeader);
+      token = cookies['auth_token'] || null;
+    }
+  }
+  
+  if (!token) {
+    throw new UnauthorizedError('Authentication required');
+  }
+  
+  const payload = verifyToken(token);
+  
+  if (!payload) {
+    throw new UnauthorizedError('Invalid or expired token');
+  }
+  
+  // Add user info to context
+  c.set('user', {
+    userId: payload.userId,
+    email: payload.email,
+  });
+  
   await next();
 }
 
 /**
- * Get authenticated user from context - STUB
+ * Optional authentication middleware
+ * Sets c.var.user if authenticated, but doesn't require it
+ */
+export async function optionalAuth(c: Context, next: Next) {
+  // Try to get token from Authorization header
+  const authHeader = c.req.header('Authorization');
+  let token = extractBearerToken(authHeader);
+  
+  // Also check cookie as fallback
+  if (!token) {
+    const cookieHeader = c.req.header('Cookie');
+    if (cookieHeader) {
+      const cookies = parseCookies(cookieHeader);
+      token = cookies['auth_token'] || null;
+    }
+  }
+  
+  if (token) {
+    const payload = verifyToken(token);
+    
+    if (payload) {
+      c.set('user', {
+        userId: payload.userId,
+        email: payload.email,
+      });
+    }
+  }
+  
+  await next();
+}
+
+/**
+ * Get authenticated user from context
  */
 export function getAuthUser(c: Context): AuthContext | null {
-  return null;
+  return c.get('user') || null;
 }
 
 /**
- * Get full user object from context - STUB
+ * Get full user object from context (with lazy loading)
  */
-export function getFullUser(c: Context): unknown {
-  return null;
+export async function getFullUser(c: Context): Promise<User | null> {
+  // Check if already loaded
+  const cached = c.get('fullUser');
+  if (cached) {
+    return cached;
+  }
+  
+  // Get auth context
+  const auth = getAuthUser(c);
+  if (!auth) {
+    return null;
+  }
+  
+  // Load user from database
+  const user = await findUserById(auth.userId);
+  if (user) {
+    c.set('fullUser', user);
+  }
+  
+  return user;
 }
 
 /**
- * Require admin role middleware - STUB
+ * Require admin role middleware
  */
 export async function requireAdmin(c: Context, next: Next) {
-  throw new NotImplementedError('Authentication not configured. HYPR auth integration pending.');
+  const user = await getFullUser(c);
+  
+  if (!user) {
+    throw new UnauthorizedError('Authentication required');
+  }
+  
+  if (user.role !== 'admin') {
+    throw new UnauthorizedError('Admin access required');
+  }
+  
+  await next();
 }
 
 /**
- * Cookie options for session cookies - STUB
+ * Parse cookies from header
+ */
+function parseCookies(cookieHeader: string): Record<string, string> {
+  const cookies: Record<string, string> = {};
+  
+  cookieHeader.split(';').forEach(cookie => {
+    const [name, ...valueParts] = cookie.trim().split('=');
+    if (name && valueParts.length > 0) {
+      cookies[name.trim()] = decodeURIComponent(valueParts.join('='));
+    }
+  });
+  
+  return cookies;
+}
+
+/**
+ * Create cookie options for auth token
  */
 export function getAuthCookieOptions(): {
   httpOnly: boolean;
@@ -86,10 +180,13 @@ export function getAuthCookieOptions(): {
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
     path: '/',
-    maxAge: 7 * 24 * 60 * 60,
+    maxAge: 7 * 24 * 60 * 60, // 7 days in seconds
   };
 }
 
+/**
+ * Create clear cookie options for logout
+ */
 export function getClearCookieOptions(): {
   httpOnly: boolean;
   secure: boolean;
@@ -105,5 +202,3 @@ export function getClearCookieOptions(): {
     maxAge: 0,
   };
 }
-
-export const SESSION_COOKIE_NAME = 'auth_token';

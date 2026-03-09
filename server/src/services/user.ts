@@ -74,7 +74,7 @@ function getJwtExpiry(): string {
 export async function hashPassword(password: string): Promise<string> {
   // Validate password strength
   if (password.length < 8) {
-    throw new Error('Password must be at least 8 characters long');
+    throw new ValidationError('Password must be at least 8 characters long', { field: 'password' });
   }
   
   return bcrypt.hash(password, BCRYPT_COST);
@@ -249,7 +249,7 @@ export async function initiatePasswordReset(email: string): Promise<{ token: str
  */
 export async function completePasswordReset(token: string, newPassword: string): Promise<boolean> {
   if (newPassword.length < 8) {
-    throw new Error('Password must be at least 8 characters long');
+    throw new ValidationError('Password must be at least 8 characters long', { field: 'newPassword' });
   }
   
   const passwordHash = await hashPassword(newPassword);
@@ -286,19 +286,19 @@ export async function changePassword(
   const user = await findUserById(userId);
   
   if (!user || !user.passwordHash) {
-    throw new Error('User not found');
+    throw new NotFoundError('User');
   }
 
   // Verify current password
   const isValid = await verifyPassword(currentPassword, user.passwordHash);
 
   if (!isValid) {
-    throw new Error('Current password is incorrect');
+    throw new UnauthorizedError('Current password is incorrect');
   }
   
   // Validate new password
   if (newPassword.length < 8) {
-    throw new Error('New password must be at least 8 characters long');
+    throw new ValidationError('New password must be at least 8 characters long', { field: 'newPassword' });
   }
   
   // Hash and update password

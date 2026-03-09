@@ -11,7 +11,7 @@ import { dashboardRoutes } from './routes/dashboard.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { billingRoutes } from './routes/billing.js';
 import { webhookRoutes } from './routes/webhooks.js';
-// Auth routes removed - HYPR will handle authentication
+import { authRoutes } from './routes/auth.js';
 import { requestLogger } from './middleware/requestLogger.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { 
@@ -99,8 +99,8 @@ function getBaseUrl(c: any): string {
   return c.env?.BASE_URL || process.env.BASE_URL || 'https://talk.onhyper.io';
 }
 
-// Authentication routes removed - HYPR will handle auth
-// app.route('/api/v1/auth', authRoutes);
+// Authentication routes
+app.route('/api/v1/auth', authRoutes);
 
 // API key management routes (require session auth, not API key)
 app.route('/api/keys', keysRoutes);
