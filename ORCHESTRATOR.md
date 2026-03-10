@@ -32,7 +32,7 @@ For each ready task, use `sessions_spawn` with mode="run":
 }
 ```
 
-## Current Status (Updated 2026-03-08)
+## Current Status (Updated 2026-03-10)
 
 **All Waves 1-6 are COMPLETE.** See `tasks/done/` for completed work.
 
